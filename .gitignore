@@ -62,3 +62,4 @@ audio_engine/src/record.pkf
 # ===== Repo packaging outputs =====
 dist/staging/
 dist/*.zip
+!dist/audiodevice_engine_win64_*.zip
