@@ -1,0 +1,14 @@
+[package]
+name = "portaudio-sys2"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+links = "portaudio"
+build = "build.rs"
+
+[lib]
+name = "portaudio_sys"
+path = "src/lib.rs"
+
+[build-dependencies]
+
