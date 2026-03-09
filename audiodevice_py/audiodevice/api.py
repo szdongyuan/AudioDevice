@@ -51,6 +51,22 @@ class DeviceList(list):
         self._default_input_index = default_input_index
         self._default_output_index = default_output_index
 
+    def _hostapi_name_for_index(self, hi: int) -> str:
+        """与 query_hostapis() 一致：优先从 query_hostapis() 取 hostapi 名称，避免 Unknown。"""
+        if hi < 0:
+            return "Unknown"
+        try:
+            per = query_hostapis()
+            if isinstance(per, (list, tuple)) and 0 <= hi < len(per):
+                n = (per[hi].get("name") if isinstance(per[hi], dict) else None) or ""
+                if n:
+                    return str(n)
+        except Exception:
+            pass
+        if 0 <= hi < len(self._hostapi_names):
+            return self._hostapi_names[hi] or "Unknown"
+        return "Unknown"
+
     def __repr__(self) -> str:
         # Match the common "audiodevice.query_devices()" table-ish output
         # (marker + index + "name, hostapi (X in, Y out)").
@@ -58,7 +74,7 @@ class DeviceList(list):
         for i, d in enumerate(self):
             name = str(d.get("name", ""))
             hi = int(d.get("hostapi", -1) or -1)
-            hostapi = self._hostapi_names[hi] if 0 <= hi < len(self._hostapi_names) else "Unknown"
+            hostapi = self._hostapi_name_for_index(hi)
             mi = int(d.get("max_input_channels", 0) or 0)
             mo = int(d.get("max_output_channels", 0) or 0)
 
@@ -164,10 +180,16 @@ def _hostapis_all() -> Tuple[List[str], Dict[str, List[str]]]:
     by_backend: Dict[str, List[str]] = {"portaudio": [], "cpal": []}
     order: List[str] = []
 
+    def _hostapi_name_from_item(x: Any) -> str:
+        """引擎可能返回字符串或带 'name' 的 dict，统一成显示名。"""
+        if isinstance(x, dict) and "name" in x:
+            return str(x["name"]).strip() or str(x)
+        return str(x).strip() if x is not None else ""
+
     # PortAudio hostapis: match audiodevice naming on Windows.
     try:
         r = _list_hostapis_raw_backend("portaudio")
-        pa = [str(x) for x in (r.get("hostapis") or [])]
+        pa = [_hostapi_name_from_item(x) for x in (r.get("hostapis") or []) if _hostapi_name_from_item(x)]
     except Exception:
         pa = []
     by_backend["portaudio"] = pa
@@ -181,7 +203,7 @@ def _hostapis_all() -> Tuple[List[str], Dict[str, List[str]]]:
     # CPAL hostapis: currently only expose ASIO in the audiodevice-like layer.
     try:
         r = _list_hostapis_raw_backend("cpal")
-        cp = [str(x) for x in (r.get("hostapis") or [])]
+        cp = [_hostapi_name_from_item(x) for x in (r.get("hostapis") or []) if _hostapi_name_from_item(x)]
     except Exception:
         cp = []
     by_backend["cpal"] = cp
@@ -628,6 +650,12 @@ def query_devices(
     for i, d in enumerate(devs):
         d["index"] = int(i)
 
+    # 确保 hostapi_names 覆盖所有设备上的 hostapi 索引，避免显示 Unknown（例如引擎返回的 hostapi 格式与 order 不一致时）
+    max_hi = max(int(d.get("hostapi", -1) or -1) for d in devs) if devs else -1
+    hostapi_names_final: List[str] = list(hostapis)
+    for idx in range(len(hostapi_names_final), max_hi + 1):
+        hostapi_names_final.append(f"HostAPI {idx}")
+
     def find_index_by_default_name(wanted: Optional[str]) -> Optional[int]:
         if not wanted:
             return None
@@ -656,7 +684,7 @@ def query_devices(
 
     dev_list = DeviceList(
         devs,
-        hostapi_names=list(hostapis),
+        hostapi_names=hostapi_names_final,
         default_input_index=default_in_idx,
         default_output_index=default_out_idx,
     )
@@ -792,7 +820,7 @@ def rec_monitor(
         device_in=device_in,
         device_out=device_out,
     )
-    backend_eff = _backend_for_hostapi(hostapi_eff)
+    backend_eff, engine_hostapi, _ = _hostapi_display_to_engine(hostapi_eff)
 
     c = AudioDeviceClient(default.host, default.port, timeout=default.timeout)
     fs = fs0
@@ -812,7 +840,7 @@ def rec_monitor(
                         {
                             "cmd": "session_start",
                             "backend": backend_eff,
-                            "hostapi": hostapi_eff,
+                            "hostapi": engine_hostapi,
                             "mode": "monitor_record",
                             "sr": int(fs_try),
                             "in_ch": int(in_ch_try),
@@ -936,14 +964,14 @@ def _rec_engine(
         device_in=device_in,
         device_out=None,
     )
-    backend_eff = _backend_for_hostapi(hostapi_eff)
+    backend_eff, engine_hostapi, _ = _hostapi_display_to_engine(hostapi_eff)
 
     c = AudioDeviceClient(default.host, default.port, timeout=default.timeout)
     c.request(
         {
             "cmd": "session_start",
             "backend": backend_eff,
-            "hostapi": hostapi_eff,
+            "hostapi": engine_hostapi,
             "mode": "record",
             "sr": fs,
             "in_ch": ch,
@@ -998,14 +1026,14 @@ def _play_engine(
         device_in=None,
         device_out=device_out,
     )
-    backend_eff = _backend_for_hostapi(hostapi_eff)
+    backend_eff, engine_hostapi, _ = _hostapi_display_to_engine(hostapi_eff)
 
     c = AudioDeviceClient(default.host, default.port, timeout=default.timeout)
     c.request(
         {
             "cmd": "session_start",
             "backend": backend_eff,
-            "hostapi": hostapi_eff,
+            "hostapi": engine_hostapi,
             "mode": "play",
             "sr": fs,
             "in_ch": 0,
@@ -1086,14 +1114,14 @@ def _playrec_engine(
         device_in=device_in,
         device_out=device_out,
     )
-    backend_eff = _backend_for_hostapi(hostapi_eff)
+    backend_eff, engine_hostapi, _ = _hostapi_display_to_engine(hostapi_eff)
 
     c = AudioDeviceClient(default.host, default.port, timeout=default.timeout)
     c.request(
         {
             "cmd": "session_start",
             "backend": backend_eff,
-            "hostapi": hostapi_eff,
+            "hostapi": engine_hostapi,
             "mode": "playrec",
             "sr": fs,
             "in_ch": int(in_ch),
@@ -1905,14 +1933,14 @@ def rec_long(
         device_in=device_in,
         device_out=None,
     )
-    backend_eff = _backend_for_hostapi(hostapi_eff)
+    backend_eff, engine_hostapi, _ = _hostapi_display_to_engine(hostapi_eff)
 
     c = AudioDeviceClient(default.host, default.port, timeout=default.timeout)
     c.request(
         {
             "cmd": "session_start",
             "backend": backend_eff,
-            "hostapi": hostapi_eff,
+            "hostapi": engine_hostapi,
             "mode": "record_long",
             "sr": fs,
             "in_ch": ch,

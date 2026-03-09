@@ -1,2 +1,4 @@
 import audiodevice as ad
-print(ad.default.latency)
+ad.init()
+print(ad.query_hostapis())
+print(ad.query_devices())

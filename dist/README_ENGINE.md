@@ -10,56 +10,80 @@ Most users do **not** need to run the EXE manually — the Python SDK can start 
 - `README_ENGINE.md` (this file)
 - `API_USAGE.md` (how to use the Python SDK)
 
-## Recommended setup (let Python auto-start the engine)
+## Setup: use environment variable to point to this ZIP
 
-1) Install the Python SDK wheel:
+The Python SDK finds the engine by reading the `AUDIODEVICE_ENGINE_URL` environment variable. Follow the steps below.
+
+### Step 1 — Install the Python SDK wheel
 
 ```powershell
 python -m pip install C:\path\to\audiodevice-<version>-py3-none-any.whl
 ```
 
-2) Put this ZIP somewhere stable, for example:
+### Step 2 — Put this ZIP in a fixed folder
+
+1. Choose a folder you won’t delete (e.g. `C:\tools\audiodevice`).
+2. In **PowerShell**, create the folder and copy the ZIP (replace paths with your actual download location and ZIP name):
 
 ```powershell
-mkdir C:\tools\audiodevice
-copy C:\Downloads\audiodevice_engine_win64_*.zip C:\tools\audiodevice\
+mkdir C:\tools\audiodevice -Force
+copy "C:\YourDownloads\audiodevice_engine_win64_xxx.zip" "C:\tools\audiodevice\"
 ```
 
-3) Point the SDK to the ZIP (current PowerShell session):
+3. Note the **full path** to the ZIP (e.g. `C:\tools\audiodevice\audiodevice_engine_win64_20260305.zip`). You’ll need it for the next step.
+
+### Step 3 — Add the environment variable `AUDIODEVICE_ENGINE_URL` (permanent, set once)
+
+The variable tells the SDK where the engine ZIP is. Set it **permanently** using one of the methods below so you don’t need to configure it again.
+
+- **Using the GUI**  
+  1. Press `Win + R`, type `sysdm.cpl`, press Enter to open System Properties.  
+  2. Open the **Advanced** tab → click **Environment Variables**.  
+  3. Under **User variables** (or System variables), click **New**.  
+  4. Variable name: `AUDIODEVICE_ENGINE_URL`  
+  5. Variable value: the full path to the ZIP (e.g. `C:\tools\audiodevice\audiodevice_engine_win64_20260305.zip`).  
+  6. OK to save. **New** PowerShell or Command Prompt windows will see the variable; close and reopen any already-open terminals.
+
+- **Using PowerShell (permanent user variable)**  
+  In PowerShell (replace with your actual ZIP path):
 
 ```powershell
-$env:AUDIODEVICE_ENGINE_URL="C:\tools\audiodevice\audiodevice_engine_win64_xxx.zip"
+[Environment]::SetEnvironmentVariable("AUDIODEVICE_ENGINE_URL", "C:\tools\audiodevice\audiodevice_engine_win64_xxx.zip", "User")
 ```
 
-Optional SHA256 verification (only if provided to you):
+Then open a **new** PowerShell window before running Python.
+
+### Step 4 — Optional: SHA256 verification
+
+If you were given a SHA256 for the engine ZIP, you can set it permanently so the SDK verifies the archive before use:
+
+- **GUI**: New variable `AUDIODEVICE_ENGINE_SHA256` with the given value.
+- **PowerShell**: `[Environment]::SetEnvironmentVariable("AUDIODEVICE_ENGINE_SHA256", "<sha256>", "User")`
+
+You can skip this if no SHA256 was provided.
+
+### Step 5 — Where the engine is used
+
+After `AUDIODEVICE_ENGINE_URL` is set, the SDK will unpack the ZIP into the cache directory when needed (default):
+
+- `%LOCALAPPDATA%\audiodevice\engine\`  
+  (e.g. `C:\Users\YourName\AppData\Local\audiodevice\engine\`)
+
+No need to extract the ZIP there yourself.
+
+### Step 6 — Quick test
 
 ```powershell
-$env:AUDIODEVICE_ENGINE_SHA256="<sha256>"
+python -c "import audiodevice as ad; ad.init(); print(ad.query_backends())"
 ```
 
-4) Quick test:
+If you see a list of backends, the engine is working.
 
-```powershell
-python -c "import audiodevice as ad; ad.default.auto_start=True; print(ad.query_backends())"
-```
-
-When using `AUDIODEVICE_ENGINE_URL`, the engine is installed to the cache directory (default):
-
-- `%LOCALAPPDATA%\audiodevice\engine\`
-
-## Alternative setup (use an extracted EXE directly)
-
-Extract the ZIP, then in Python:
-
-```python
-import audiodevice as ad
-ad.default.auto_start = True
-ad.default.engine_exe = r"C:\tools\audiodevice\audiodevice.exe"
-ad.default.engine_cwd = r"C:\tools\audiodevice"
-```
+---
 
 ## Troubleshooting (common user issues)
 
+- **Engine not found / cannot start**: Make sure `AUDIODEVICE_ENGINE_URL` is set to the **full path** of the engine ZIP. If you just set it permanently, **close and reopen** PowerShell or your IDE before running Python again.
 - **Firewall prompt**: allow `audiodevice.exe` to communicate on local loopback (127.0.0.1).
 - **`portaudio.dll`**:
   - If your ZIP includes `portaudio.dll`, keep it in the same folder as `audiodevice.exe` (or add that folder to PATH).

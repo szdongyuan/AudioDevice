@@ -2,8 +2,8 @@
 
 这份文档告诉你“装好以后怎么用”。你不需要了解引擎内部细节，只需要知道：
 
-- `audiodevice` 会在本机启动一个后台引擎（可自动启动）
-- 你在 Python 里调用 `ad.play()` / `ad.rec()` 等即可
+- 调用 `ad.init()` 后会在本机启动一个后台引擎
+- 之后在 Python 里调用 `ad.play()` / `ad.rec()` 等即可
 
 下面示例都以：
 
@@ -13,29 +13,32 @@ import audiodevice as ad
 
 为开头。
 
-## 1) 启动方式（推荐：自动启动）
+## 1) 启动方式（推荐：显式初始化）
 
-在代码里加两行即可让 SDK 自动启动引擎：
+在代码里调用 `ad.init()` 即可启动引擎并预热设备列表（第一次可能需几秒）：
 
 ```python
 import audiodevice as ad
 
-ad.default.auto_start = True
+ad.init()
 ```
 
-如果你把引擎 ZIP 配置为环境变量（见 `INSTALL.md` / `INSTALL_zh_CN.md`），通常不需要在代码里写任何引擎路径。
+如果你把引擎 ZIP 配置为环境变量（见 `INSTALL.md` / `INSTALL_zh_CN.md`），通常不需要传任何参数。
 
-如果你希望指定固定路径：
+如果你希望指定固定路径或超时：
 
 ```python
-ad.default.engine_exe = r"C:\tools\audiodevice\audiodevice.exe"
-ad.default.engine_cwd = r"C:\tools\audiodevice"
+ad.init(
+    engine_exe=r"C:\tools\audiodevice\audiodevice.exe",
+    engine_cwd=r"C:\tools\audiodevice",
+    timeout=10,
+)
 ```
 
 ## 2) 快速自检（建议先跑）
 
 ```python
-ad.default.auto_start = True
+ad.init()
 print(ad.query_backends())
 print(ad.query_devices())  # 会打印一个设备列表（类似表格）
 ```
@@ -87,7 +90,7 @@ ad.default.device_out = "UMC ASIO Driver"
 import numpy as np
 import audiodevice as ad
 
-ad.default.auto_start = True
+ad.init()
 ad.default.hostapi = "Windows WASAPI"
 
 y = ad.rec(3.0, blocking=True)  # 录 3 秒，返回 float32 ndarray
@@ -106,11 +109,11 @@ y = ad.rec(3.0, blocking=True, save_wav=True, wav_path="rec.wav")
 import numpy as np
 import audiodevice as ad
 
+ad.init()
 fs = 48000
 t = np.arange(fs * 1, dtype=np.float32) / fs
 y = 0.1 * np.sin(2 * np.pi * 440 * t).astype(np.float32)
 
-ad.default.auto_start = True
 ad.play(y, blocking=True, samplerate=fs)
 ```
 

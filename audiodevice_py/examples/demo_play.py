@@ -13,15 +13,13 @@ def main() -> None:
         ad.default.engine_exe = ENGINE_EXE
         ad.default.engine_cwd = os.path.dirname(ENGINE_EXE)
 
-    ad.default.hostapi = "ASIO"
+    ad.default.hostapi = "WASAPI"
     ad.default.samplerate = 48_000
-    # ad.default.device_out = "ASIO4ALL v2"
-    ad.default.device_out = "UMC ASIO Driver"
-                                                                      
+    ad.default.channels = 2
+    ad.default.device = (13,13)                                                         
     fs = ad.default.samplerate
     t = np.arange(fs*5, dtype=np.float32) / fs
     y = 0.1 * np.sin(2 * np.pi * 1000 * t).astype(np.float32)
-
     ad.play(y, blocking=True)
 
 if __name__ == "__main__":

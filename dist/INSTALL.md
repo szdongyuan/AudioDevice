@@ -5,19 +5,10 @@ This guide is for end users who received the prebuilt packages (no source checko
 ## What you need
 
 - **OS**: Windows 10/11 (x64)
-- **Python**: Python 3.10+ recommended
+- **Python**: Already installed (Python 3.10+ recommended)
 - **Two files** (usually provided to you):
   - `audiodevice-<version>-py3-none-any.whl` (Python SDK wheel)
   - `audiodevice_engine_win64_<timestamp>.zip` (engine ZIP: `audiodevice.exe` + optional `portaudio.dll` + docs)
-
-## 0) Verify Python works
-
-Open PowerShell:
-
-```powershell
-python -V
-python -m pip -V
-```
 
 ## 1) Install the Python SDK (wheel)
 
@@ -60,17 +51,20 @@ Extract the ZIP, then add the folder containing `audiodevice.exe` to your PATH.
 
 ### Option C: set the engine path in your code
 
+Call `ad.init()` with the engine path:
+
 ```python
 import audiodevice as ad
-ad.default.auto_start = True
-ad.default.engine_exe = r"C:\tools\audiodevice\audiodevice.exe"
-ad.default.engine_cwd = r"C:\tools\audiodevice"
+ad.init(
+    engine_exe=r"C:\tools\audiodevice\audiodevice.exe",
+    engine_cwd=r"C:\tools\audiodevice",
+)
 ```
 
 ## 3) Quick test
 
 ```powershell
-python -c "import audiodevice as ad; ad.default.auto_start=True; print(ad.query_backends()); print(ad.query_devices())"
+python -c "import audiodevice as ad; ad.init(); print(ad.query_backends()); print(ad.query_devices())"
 ```
 
 If you see a backend list and a device list, installation is OK.

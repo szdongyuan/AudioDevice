@@ -24,7 +24,7 @@ ENV/
 
 # Packaging / build outputs (Python SDK)
 audiodevice_py/build/
-audiodevice_py/dist/
+//audiodevice_py/dist/
 audiodevice_py/*.egg-info/
 
 # Local engine artifacts that should not be versioned
