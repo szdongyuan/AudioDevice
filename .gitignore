@@ -1,0 +1,65 @@
+# ===== OS / Editor =====
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Cursor workspace metadata (project-local)
+.cursor/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual envs
+.venv/
+venv/
+ENV/
+
+# Packaging / build outputs (Python SDK)
+audiodevice_py/build/
+//audiodevice_py/dist/
+audiodevice_py/*.egg-info/
+
+# Local engine artifacts that should not be versioned
+audiodevice_py/*.exe
+audiodevice_py/*.dll
+audiodevice_py/portaudio.dll
+
+# If you intentionally bundle engine artifacts into the Python package, keep them:
+!audiodevice_py/audiodevice/bin/
+!audiodevice_py/audiodevice/bin/*.exe
+!audiodevice_py/audiodevice/bin/*.dll
+
+# ===== Rust / Cargo =====
+**/target/
+*.pdb
+
+# ===== Third-party toolchains / deps =====
+cmake-*/
+
+# PortAudio helper tooling (vcpkg) is huge and local-only
+audio_engine/third_party/portaudio/vcpkg/
+audio_engine/third_party/portaudio/**/vcpkg_installed/
+
+# Optional PortAudio binary artifacts (user-provided)
+audio_engine/third_party/portaudio/bin/
+audio_engine/third_party/portaudio/lib/
+audio_engine/third_party/portaudio/include/
+
+# Misc local artifacts
+audio_engine/engine_err.txt
+audio_engine/{
+audio_engine/src/record.wav
+audio_engine/src/record.pkf
+
+# ===== Repo packaging outputs =====
+dist/staging/
+dist/*.zip
+!dist/audiodevice_engine_win64_*.zip

@@ -1,0 +1,15 @@
+AudioDevice
+Copyright (c) 2026 szdongyuan (and contributors)
+
+This product includes software developed by third parties:
+
+  - cpal (Cross-Platform Audio Library)
+    https://github.com/RustAudio/cpal
+    Licensed under the Apache License, Version 2.0
+
+  - portaudio-sys2 (optional PortAudio bindings)
+    In-repo crate; see audio_engine/crates/portaudio-sys2/
+    Licensed under the MIT License
+
+  - Other Rust crates (anyhow, serde, etc.) are used under their
+    respective licenses; see Cargo.lock and crates.io for details.

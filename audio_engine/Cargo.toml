@@ -1,0 +1,28 @@
+[package]
+name = "audio_engine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+cpal = { version = "0.16", features = ["asio"] }
+ctrlc = "3"
+portaudio = { version = "0.7", optional = true }
+serde = { version="1", features=["derive"] }
+serde_json = "1"
+hound = "3"
+rtrb = "0.3"
+
+# Extra deps for the JSON/TCP protocol and audio transport.
+base64 = "0.22"
+
+[features]
+default = []
+portaudio_backend = ["portaudio"]
+
+[[bin]]
+name = "audiodevice"
+path = "src/main.rs"
+
+[patch.crates-io]
+portaudio-sys2 = { path = "crates/portaudio-sys2" }
