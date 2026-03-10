@@ -1,0 +1,134 @@
+name: Build & Upload Artifacts (Windows)
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-artifacts-master
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python build tools
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade build setuptools wheel
+
+      - name: Compute CI version (PEP 440)
+        id: ver
+        shell: pwsh
+        run: |
+          $date = (Get-Date -Format "yyyyMMdd")
+          $run = "${{ github.run_number }}"
+          $ver = "0.1.0.post$date.dev$run"
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "CI version: $ver"
+
+      - name: Patch wheel version (no commit)
+        shell: pwsh
+        run: |
+          $p = "audiodevice_py/pyproject.toml"
+          $t = Get-Content -LiteralPath $p -Raw
+          $v = "${{ steps.ver.outputs.version }}"
+          $t2 = [regex]::Replace($t, '(\bversion\s*=\s*\")([^\"]+)(\")', "`$1$v`$3", 1)
+          if ($t2 -eq $t) { throw "Failed to patch version in $p" }
+          Set-Content -LiteralPath $p -Value $t2 -Encoding utf8
+
+      - name: Build Rust engine (release)
+        shell: pwsh
+        run: |
+          pushd audio_engine
+          cargo build --release
+          popd
+          if (!(Test-Path -LiteralPath "audio_engine/target/release/audiodevice.exe")) {
+            throw "Missing audio_engine/target/release/audiodevice.exe"
+          }
+
+      - name: Sync engine binary into wheel package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "audiodevice_py/audiodevice/bin" | Out-Null
+          Copy-Item -Force "audio_engine/target/release/audiodevice.exe" "audiodevice_py/audiodevice/bin/audiodevice.exe"
+          if (Test-Path -LiteralPath "audio_engine/target/release/portaudio.dll") {
+            Copy-Item -Force "audio_engine/target/release/portaudio.dll" "audiodevice_py/audiodevice/bin/portaudio.dll"
+          }
+
+      - name: Build wheel (no isolation)
+        shell: pwsh
+        run: |
+          pushd audiodevice_py
+          python -m build --wheel --no-isolation
+          popd
+
+      - name: Package engine zip
+        shell: pwsh
+        run: |
+          $zip = "dist/audiodevice_engine_win64_ci.zip"
+          pwsh -NoProfile -ExecutionPolicy Bypass -File "dist/package_engine.ps1" -Profile release -OutZip $zip
+          if (!(Test-Path -LiteralPath $zip)) { throw "Missing $zip" }
+
+      - name: Ensure GitHub CLI is available
+        shell: pwsh
+        run: |
+          gh --version
+
+      - name: Create/update rolling release (tag=ci) and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $tag = "ci"
+          $title = "CI artifacts (Windows)"
+          $notes = @"
+          Auto-built from commit: ${{ github.sha }}
+          Wheel version: ${{ steps.ver.outputs.version }}
+          "@
+
+          $exists = $true
+          gh release view $tag | Out-Null 2>$null
+          if ($LASTEXITCODE -ne 0) { $exists = $false }
+
+          if (-not $exists) {
+            gh release create $tag --target "${{ github.sha }}" --title "$title" --notes "$notes" --prerelease
+          } else {
+            gh release edit $tag --target "${{ github.sha }}" --title "$title" --notes "$notes" --prerelease
+          }
+
+          $whl = Get-ChildItem -LiteralPath "audiodevice_py/dist" -Filter "*.whl" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $whl) { throw "Wheel not found under audiodevice_py/dist" }
+
+          gh release upload $tag `
+            "$($whl.FullName)" `
+            "audio_engine/target/release/audiodevice.exe" `
+            "dist/audiodevice_engine_win64_ci.zip" `
+            --clobber
+
+      - name: Upload workflow artifacts (optional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: audiodevice-artifacts
+          path: |
+            audiodevice_py/dist/*.whl
+            audio_engine/target/release/audiodevice.exe
+            dist/audiodevice_engine_win64_ci.zip
