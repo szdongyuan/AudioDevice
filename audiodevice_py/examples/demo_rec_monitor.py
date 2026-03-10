@@ -28,48 +28,28 @@ def main() -> None:
 
     wav_path = os.path.join(os.path.dirname(__file__), "rec_monitor.wav")
 
-    last_err: Optional[Exception] = None
-    for hostapi in ("ASIO", "WASAPI"):
-        ad.default.hostapi = hostapi
-        print("\ntrying hostapi:", hostapi)
+    # Same style as demo_rec.py
+    ad.default.hostapi = "ASIO"
+    ad.default.samplerate = 48_000
+    ad.default.channels = 2
+    # ad.default.device_in = "ASIO4ALL"
+    ad.default.device_in = "UMC ASIO Driver"
+    # For ASIO, monitor/duplex typically expects the same device.
+    ad.default.device_out = ad.default.device_in
 
-        dev_in = ad.query_devices_raw(hostapi=hostapi, direction="input")["devices"]
-        dev_out = ad.query_devices_raw(hostapi=hostapi, direction="output")["devices"]
+    print("hostapi:", ad.default.hostapi)
+    print("device_in:", ad.default.device_in or "<default>")
+    print("device_out:", ad.default.device_out or "<default>")
 
-        ad.default.device_in = _pick_device(
-            dev_in,
-            prefer=["microphone", "mic", "umc", "usb"],
-        )
-        ad.default.device_out = _pick_device(
-            dev_out,
-            prefer=["speaker", "speakers", "headphone", "headphones", "umc", "usb"],
-        )
-
-        # For ASIO, monitor/duplex typically expects the same device.
-        if hostapi.upper() == "ASIO" and ad.default.device_in:
-            ad.default.device_out = ad.default.device_in
-
-        print("device_in:", ad.default.device_in or "<default>")
-        print("device_out:", ad.default.device_out or "<default>")
-
-        try:
-            x = ad.rec_monitor(
-                10.0,  # seconds
-                save_wav=True,
-                wav_path=wav_path,
-                blocking=True,
-                samplerate=48_000,
-                channels=2,
-            )
-            print("captured:", x.shape, x.dtype, "wav:", wav_path)
-            last_err = None
-            break
-        except Exception as e:
-            last_err = e
-            print("failed on hostapi:", hostapi, "err:", e)
-
-    if last_err is not None:
-        raise last_err
+    x = ad.rec_monitor(
+        10.0,  # seconds
+        save_wav=True,
+        wav_path=wav_path,
+        blocking=True,
+        samplerate=48_000,
+        channels=2,
+    )
+    print("captured:", x.shape, x.dtype, "wav:", wav_path)
 
 
 if __name__ == "__main__":
