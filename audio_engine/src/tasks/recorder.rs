@@ -37,7 +37,7 @@ fn wav_recorder_loop(
     let mut seg_idx = 0usize;
     let mut frames_in_seg: u64 = 0;
     let seg_limit_frames: u64 = if rotate_s > 0.0 {
-        (rotate_s * (sr as f64)) as u64
+        (rotate_s * (sr as f64)).round() as u64
     } else {
         0
     };
@@ -48,12 +48,14 @@ fn wav_recorder_loop(
     let mut tmp = vec![0.0f32; block_frames * (ch as usize)];
 
     loop {
-        if stop_flag.load(Ordering::Relaxed) {
-            break;
-        }
-
         let got = bus_in.pop_samples(&mut tmp)?;
         if got == 0 {
+            // If a stop was requested, keep draining any remaining buffered audio
+            // before finalizing the WAV. This prevents dropping the last callback-sized
+            // chunk (often ~10ms on Windows audio stacks).
+            if stop_flag.load(Ordering::Relaxed) {
+                break;
+            }
             thread::sleep(Duration::from_millis(5));
             continue;
         }

@@ -326,12 +326,14 @@ impl SessionInner {
             let in_ch_usize = in_cfg.channels as usize;
             let out_ch_usize = out_cfg.channels as usize;
             let mut monitor_tmp: Vec<f32> = Vec::new();
+            let need_wav_recorder = !self.params.path.is_empty();
 
             let stop_flag_in = stop_flag.clone();
             let metrics_in = metrics.clone();
             let stop_after_frames: Option<u64> =
                 if matches!(self.mode, SessionMode::RecordShort) && self.params.duration_s > 0.0 {
-                    Some((self.params.duration_s * (in_cfg.sr as f64)) as u64)
+                    // Avoid truncation due to float representation (e.g. 4.999999999 -> 239999).
+                    Some((self.params.duration_s * (in_cfg.sr as f64)).round() as u64)
                 } else {
                     None
                 };
@@ -344,9 +346,36 @@ impl SessionInner {
                 metrics_in
                     .frames_in
                     .fetch_add(frames as u64, Ordering::Relaxed);
-                let _ = bus_in.push_samples_nonblocking(data, &metrics_in);
+                // When a WAV recorder is active, base short-record stopping on *accepted* frames.
+                // This avoids stopping early if the ring buffer briefly fills (which would make
+                // the resulting WAV slightly shorter than requested).
+                let pushed_samples_bus = if need_wav_recorder {
+                    match bus_in.push_samples_partial_nonblocking(data, in_ch_usize) {
+                        Ok(n) => {
+                            if n < data.len() {
+                                metrics_in.overruns.fetch_add(1, Ordering::Relaxed);
+                            }
+                            n
+                        }
+                        Err(_) => 0,
+                    }
+                } else {
+                    let _ = bus_in.push_samples_nonblocking(data, &metrics_in);
+                    data.len()
+                };
                 if return_audio {
-                    let _ = capture.push_samples_nonblocking(data, &metrics_in);
+                    if need_wav_recorder {
+                        let _ = capture
+                            .push_samples_partial_nonblocking(data, in_ch_usize)
+                            .map(|n| {
+                                if n < data.len() {
+                                    metrics_in.overruns.fetch_add(1, Ordering::Relaxed);
+                                }
+                                n
+                            });
+                    } else {
+                        let _ = capture.push_samples_nonblocking(data, &metrics_in);
+                    }
                     metrics_in
                         .capture_frames
                         .fetch_add(frames as u64, Ordering::Relaxed);
@@ -394,7 +423,12 @@ impl SessionInner {
                 }
 
                 if let Some(target) = stop_after_frames {
-                    frames_seen = frames_seen.saturating_add(frames as u64);
+                    let frames_for_stop = if need_wav_recorder {
+                        (pushed_samples_bus / in_ch_usize) as u64
+                    } else {
+                        frames as u64
+                    };
+                    frames_seen = frames_seen.saturating_add(frames_for_stop);
                     if frames_seen >= target {
                         stop_flag_in.store(true, Ordering::Relaxed);
                     }
