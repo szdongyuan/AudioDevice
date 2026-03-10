@@ -1,0 +1,3 @@
+[submodule "audiodevice_dy"]
+	path = audiodevice_dy
+	url = https://github.com/szdongyuan/AudioDevice.git
