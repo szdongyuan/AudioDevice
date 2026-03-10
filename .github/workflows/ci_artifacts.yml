@@ -49,13 +49,7 @@ jobs:
           $p = "audiodevice_py/pyproject.toml"
           $t = Get-Content -LiteralPath $p -Raw
           $v = "${{ steps.ver.outputs.version }}"
-          $t2 = [regex]::Replace(
-            $t,
-            '(^\s*version\s*=\s*\")[^\"]+(\")',
-            { param($m) $m.Groups[1].Value + $v + $m.Groups[2].Value },
-            1,
-            [System.Text.RegularExpressions.RegexOptions]::Multiline
-          )
+          $t2 = $t -replace '(?m)^\s*version\s*=\s*\"[^\"]+\"', "version = `"$v`""
           if ($t2 -eq $t) { throw "Failed to patch version in $p" }
           Set-Content -LiteralPath $p -Value $t2 -Encoding utf8
 
