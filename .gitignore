@@ -63,3 +63,7 @@ audio_engine/src/record.pkf
 dist/staging/
 dist/*.zip
 !dist/audiodevice_engine_win64_*.zip
+
+# Local extracted engine folders (from ZIP) and loose DLLs
+dist/audiodevice_engine_win64_*/
+portaudio.dll
