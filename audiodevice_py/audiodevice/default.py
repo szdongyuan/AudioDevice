@@ -93,17 +93,36 @@ class _DefaultHolder:
             name = value.strip()
             if not name:
                 raise ValueError("default.hostapi name must be non-empty")
-            self._cfg.hostapi_name = name
             try:
                 from .api import query_hostapis
 
                 hs = query_hostapis()
-                want = name.strip().lower()
+                want_raw = name.strip()
+
+                def _canon(x: str) -> str:
+                    s = str(x or "").strip().lower()
+                    if s.startswith("windows "):
+                        s = s[len("windows ") :].strip()
+                    # normalize common whitespace/aliases
+                    s = " ".join(s.split())
+                    return s
+
+                want = _canon(want_raw)
+                matched_name = None
                 for i, h in enumerate(hs):
-                    if str(h.get("name", "")).strip().lower() == want:
+                    hn = str(h.get("name", "")).strip()
+                    if not hn:
+                        continue
+                    if _canon(hn) == want:
                         self._cfg.hostapi_index = int(i)
+                        matched_name = hn
                         break
+
+                # Keep a consistent display name if we matched; otherwise preserve user input.
+                self._cfg.hostapi_name = matched_name if matched_name is not None else want_raw
             except Exception:
+                # Preserve user input as the display name; index remains unchanged.
+                self._cfg.hostapi_name = name
                 pass
             return
         raise TypeError("default.hostapi must be int, str, or None")

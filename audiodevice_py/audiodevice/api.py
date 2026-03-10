@@ -73,7 +73,9 @@ class DeviceList(list):
         lines: List[str] = []
         for i, d in enumerate(self):
             name = str(d.get("name", ""))
-            hi = int(d.get("hostapi", -1) or -1)
+            # NOTE: hostapi index 0 is valid; don't treat it as falsy.
+            _hi_raw = d.get("hostapi", -1)
+            hi = int(_hi_raw) if _hi_raw is not None else -1
             hostapi = self._hostapi_name_for_index(hi)
             mi = int(d.get("max_input_channels", 0) or 0)
             mo = int(d.get("max_output_channels", 0) or 0)
@@ -651,7 +653,12 @@ def query_devices(
         d["index"] = int(i)
 
     # 确保 hostapi_names 覆盖所有设备上的 hostapi 索引，避免显示 Unknown（例如引擎返回的 hostapi 格式与 order 不一致时）
-    max_hi = max(int(d.get("hostapi", -1) or -1) for d in devs) if devs else -1
+    # hostapi index 0 is valid; don't treat it as falsy.
+    max_hi = (
+        max((int(d.get("hostapi", -1)) if d.get("hostapi", -1) is not None else -1) for d in devs)
+        if devs
+        else -1
+    )
     hostapi_names_final: List[str] = list(hostapis)
     for idx in range(len(hostapi_names_final), max_hi + 1):
         hostapi_names_final.append(f"HostAPI {idx}")
@@ -1342,7 +1349,7 @@ def rec(frames=None, samplerate=None, channels=None, dtype=None, out=None, mappi
     wav_path = str(kwargs.pop("wav_path", "") or "")
     save_wav = bool(kwargs.pop("save_wav", False))
     rb_seconds = kwargs.pop("rb_seconds", None)
-
+    
     if save_wav and not wav_path:
         raise ValueError("save_wav=True requires wav_path")
 
