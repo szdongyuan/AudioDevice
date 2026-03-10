@@ -6,6 +6,7 @@ import socket
 import subprocess
 import threading
 import time
+import wave
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
@@ -937,6 +938,43 @@ def rec_monitor(
     return h
 
 
+def _write_wav_from_float32(path: str, y: np.ndarray, sr: int) -> None:
+    x = np.asarray(y, dtype=np.float32)
+    if x.ndim == 1:
+        x = x[:, None]
+    if x.ndim != 2:
+        raise ValueError("audio array must be 1D or 2D")
+    if int(sr) <= 0:
+        raise ValueError("samplerate must be > 0")
+    if x.shape[0] > 0:
+        ch = int(x.shape[1])
+    else:
+        ch0 = None
+        try:
+            ch0 = default.channels[0] if getattr(default, "channels", None) is not None else None
+        except Exception:
+            ch0 = None
+        ch = int(ch0) if ch0 else 1
+    ch = max(ch, 1)
+
+    pcm16 = np.clip(x, -1.0, 1.0)
+    pcm16 = (pcm16 * 32767.0).astype(np.int16, copy=False)
+    tmp_path = f"{path}.tmp"
+    try:
+        with wave.open(tmp_path, "wb") as wf:
+            wf.setnchannels(ch)
+            wf.setsampwidth(2)
+            wf.setframerate(int(sr))
+            wf.writeframes(pcm16.tobytes())
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
 def _rec_engine(
     frames: Union[int, float],
     *,
@@ -1005,6 +1043,8 @@ def _rec_engine(
         y = h.wait()
         if isinstance(frames, int) and frames > 0 and y.shape[0] > int(frames):
             y = y[: int(frames)]
+        if save_wav and wav_path_abs:
+            _write_wav_from_float32(wav_path_abs, y, fs)
         return y
     return h
 

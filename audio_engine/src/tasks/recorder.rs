@@ -34,6 +34,19 @@ fn wav_recorder_loop(
     let ch = params.in_ch;
     let rotate_s = params.rotate_s;
 
+    // For short recordings (mode="record"), enforce an exact frame count so the WAV length
+    // matches the client-requested duration even if the audio callback size overshoots.
+    let stop_after_frames: Option<u64> = {
+        let m = params.mode.to_ascii_lowercase();
+        if (m == "record" || m == "record_short") && params.duration_s > 0.0 {
+            // Avoid truncation due to float representation (e.g. 4.999999999 -> 239999).
+            Some((params.duration_s * (sr as f64)).round() as u64)
+        } else {
+            None
+        }
+    };
+    let mut total_frames_written: u64 = 0;
+
     let mut seg_idx = 0usize;
     let mut frames_in_seg: u64 = 0;
     let seg_limit_frames: u64 = if rotate_s > 0.0 {
@@ -61,7 +74,18 @@ fn wav_recorder_loop(
         }
 
         let got_frames = (got / (ch as usize)) as u64;
-        let pcm16_bytes = convert::f32_to_pcm16_bytes_interleaved(&tmp[..got]);
+        let frames_to_write = match stop_after_frames {
+            Some(limit) if total_frames_written < limit => (limit - total_frames_written).min(got_frames),
+            Some(_limit) => 0,
+            None => got_frames,
+        };
+        if frames_to_write == 0 {
+            stop_flag.store(true, Ordering::Relaxed);
+            break;
+        }
+
+        let samples_to_write = (frames_to_write as usize) * (ch as usize);
+        let pcm16_bytes = convert::f32_to_pcm16_bytes_interleaved(&tmp[..samples_to_write]);
         for chunk in pcm16_bytes.chunks_exact(2) {
             let s = i16::from_le_bytes([chunk[0], chunk[1]]);
             if writer.write_sample(s).is_err() {
@@ -69,14 +93,22 @@ fn wav_recorder_loop(
             }
         }
 
-        metrics.wav_frames.fetch_add(got_frames, Ordering::Relaxed);
-        frames_in_seg += got_frames;
+        metrics.wav_frames.fetch_add(frames_to_write, Ordering::Relaxed);
+        total_frames_written = total_frames_written.saturating_add(frames_to_write);
+        frames_in_seg += frames_to_write;
 
         if seg_limit_frames > 0 && frames_in_seg >= seg_limit_frames {
             let _ = writer.finalize();
             seg_idx += 1;
             frames_in_seg = 0;
             writer = open_writer(&params.path, seg_idx, ch, sr)?;
+        }
+
+        if let Some(limit) = stop_after_frames {
+            if total_frames_written >= limit {
+                stop_flag.store(true, Ordering::Relaxed);
+                break;
+            }
         }
     }
 
