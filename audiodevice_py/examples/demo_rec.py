@@ -14,9 +14,9 @@ def main() -> None:
         ad.default.engine_exe = ENGINE_EXE
         ad.default.engine_cwd = os.path.dirname(ENGINE_EXE)
 
-    ad.default.hostapi = "WASAPI"
+    # hostapi is read-only; it follows from default.device
     ad.default.samplerate = 48_000
-    ad.default.device = [10,12]
+    ad.default.device = [10, 12]
     ad.default.channels = [6,2]
 
     wav_path = os.path.join(os.path.dirname(__file__), "rec7.wav")

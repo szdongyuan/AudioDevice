@@ -13,10 +13,10 @@ def main() -> None:
         ad.default.engine_exe = ENGINE_EXE
         ad.default.engine_cwd = os.path.dirname(ENGINE_EXE)
 
-    ad.default.hostapi = "WASAPI"
+    # hostapi is read-only; it follows from default.device
     ad.default.samplerate = 48_000
     ad.default.channels = 2
-    ad.default.device = (13,13)                                                         
+    ad.default.device = (13, 13)                                                         
     fs = ad.default.samplerate
     t = np.arange(fs*5, dtype=np.float32) / fs
     y = 0.1 * np.sin(2 * np.pi * 1000 * t).astype(np.float32)

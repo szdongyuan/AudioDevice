@@ -20,8 +20,12 @@ def main() -> None:
         ad.default.engine_exe = ENGINE_EXE
         ad.default.engine_cwd = os.path.dirname(ENGINE_EXE)
 
-    # Default hostapi when omitted.
-    ad.default.hostapi = "ASIO"
+    ad.init()
+
+    # hostapi is read-only; set device to an ASIO device to use ASIO as default.
+    idx = ad.device_index_for_hostapi("ASIO", "input")
+    if idx is not None:
+        ad.default.device = (idx, idx)
 
     hostapis = ad.query_hostapis_raw()["hostapis"]
     print("hostapis:", hostapis)

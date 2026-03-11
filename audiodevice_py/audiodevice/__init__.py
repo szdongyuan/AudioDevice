@@ -7,6 +7,7 @@ from .api import (
     RecordingHandle,
     _initialize,
     _terminate,
+    device_index_for_hostapi,
     get_status,
     get_stream,
     init,
@@ -32,6 +33,7 @@ from .engine import ensure_engine_available
 
 __all__ = [
     "default",
+    "device_index_for_hostapi",
     "LongRecordingHandle",
     "RecordingHandle",
     "init",

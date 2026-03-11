@@ -154,18 +154,27 @@ def _resolve_device_from_default_index(which: str) -> Tuple[str, str]:
         tuple[str, str]: `(hostapi_name, device_name)`; returns ("","") if unspecified
         or resolution fails.
     """
-    # Returns (hostapi_name, device_name) or ("","") if unspecified.
     try:
         di, do = default._device_tuple_raw()
         idx = int(di if which == "input" else do)
     except Exception:
         idx = -1
-    if idx < 0:
+    return _resolve_device_index_to_name(idx)
+
+
+def _resolve_device_index_to_name(idx: int) -> Tuple[str, str]:
+    """Resolve (hostapi_name, device_name) from a global device index.
+
+    Args:
+        idx (int): Global device index (e.g. from query_devices()). Use -1 for unspecified.
+
+    Returns:
+        tuple[str, str]: `(hostapi_name, device_name)`; returns ("", "") if idx < 0 or resolution fails.
+    """
+    if idx is None or idx < 0:
         return "", ""
     try:
-        d = query_devices(int(idx))
-        hostapi_name = query_hostapis(int(d.get("hostapi", -1))).get("name", "")
-        return str(hostapi_name), str(d.get("name", ""))
+        return _device_name_from_index(int(idx))
     except Exception:
         return "", ""
 
@@ -173,43 +182,43 @@ def _resolve_device_from_default_index(which: str) -> Tuple[str, str]:
 def _resolve_hostapi_and_devices(
     *,
     hostapi: Optional[str],
-    device_in: Optional[str],
-    device_out: Optional[str],
+    device_in: Optional[int],
+    device_out: Optional[int],
 ) -> Tuple[str, str, str]:
-    """Resolve effective host API and device names.
+    """Resolve effective host API and device names from device indices.
+
+    device_in / device_out are interpreted as device indices (int) only; device names are not accepted.
 
     Args:
         hostapi (Optional[str]): Preferred host API display name.
-        device_in (Optional[str]): Preferred input device name.
-        device_out (Optional[str]): Preferred output device name.
+        device_in (Optional[int]): Input device index (global index from query_devices()). None = use default.
+        device_out (Optional[int]): Output device index. None = use default.
 
     Returns:
         tuple[str, str, str]: `(hostapi_name, input_device_name, output_device_name)`.
-
-    Raises:
-        ValueError: If duplex defaults point to different host APIs.
     """
     hostapi_eff = str(hostapi or getattr(default, "hostapi_name", "") or "MME")
 
-    in_name = str(device_in).strip() if device_in is not None else ""
-    out_name = str(device_out).strip() if device_out is not None else ""
+    # Effective index: call argument if provided, else default.device_in/device_out if >= 0, else default.device tuple.
+    di_raw, do_raw = default._device_tuple_raw()
+    def_in = int(getattr(default, "device_in", -1))
+    def_out = int(getattr(default, "device_out", -1))
+    in_idx = device_in if device_in is not None else (def_in if def_in >= 0 else di_raw)
+    out_idx = device_out if device_out is not None else (def_out if def_out >= 0 else do_raw)
 
-    if not in_name:
-        in_name = str(getattr(default, "device_in", "") or "").strip()
-    if not out_name:
-        out_name = str(getattr(default, "device_out", "") or "").strip()
+    def _to_index(v) -> int:
+        if v is None or v == "":
+            return -1
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return -1
 
-    # If still unset, fall back to default.device indices and override hostapi accordingly.
-    in_host = ""
-    out_host = ""
-    if not in_name:
-        in_host, in_name = _resolve_device_from_default_index("input")
-    if not out_name:
-        out_host, out_name = _resolve_device_from_default_index("output")
+    in_host, in_name = _resolve_device_index_to_name(_to_index(in_idx))
+    out_host, out_name = _resolve_device_index_to_name(_to_index(out_idx))
 
     picked_hosts = [h for h in (in_host, out_host) if h]
     if picked_hosts:
-        # For duplex, require both indices (if provided) to belong to same hostapi.
         if in_host and out_host and in_host.strip().upper() != out_host.strip().upper():
             raise ValueError(f"default.device input/output must use same hostapi (got {in_host!r} vs {out_host!r})")
         hostapi_eff = picked_hosts[0]
@@ -416,11 +425,15 @@ def get_status() -> Optional[Dict[str, Any]]:
 def print_default_devices() -> None:
     """Print current default input and output device (index + name).
 
+    Uses effective indices: default.device_in / default.device_out if >= 0, else default.device.
     Call this after `init()` if you want to quickly verify device selection.
     """
     try:
-        di, do = default._device_tuple_raw()
-        di, do = int(di), int(do)
+        di_raw, do_raw = default._device_tuple_raw()
+        def_in = int(getattr(default, "device_in", -1))
+        def_out = int(getattr(default, "device_out", -1))
+        di = def_in if def_in >= 0 else int(di_raw)
+        do = def_out if def_out >= 0 else int(do_raw)
         if di >= 0:
             d = query_devices(di)
             print(f"Default input:  [{di}] {d.get('name', '')}")
@@ -433,6 +446,49 @@ def print_default_devices() -> None:
             print("Default output: (none)")
     except Exception as e:
         print("Default devices: (query failed)", e)
+
+
+def device_index_for_hostapi(
+    hostapi_name: str,
+    direction: str = "input",
+) -> Optional[int]:
+    """Return a device index for the given host API name (e.g. \"WASAPI\", \"ASIO\").
+
+    Use this to set default.device so that the read-only default.hostapi reflects the desired API.
+
+    Args:
+        hostapi_name (str): Host API display name (case-insensitive substring match).
+        direction (str): \"input\" or \"output\"; picks first device with that direction.
+
+    Returns:
+        Optional[int]: Global device index, or None if not found.
+    """
+    name = (hostapi_name or "").strip().lower()
+    if not name:
+        return None
+    try:
+        hs = query_hostapis()
+        hi = None
+        for i, h in enumerate(hs):
+            if name in str(h.get("name", "") or "").strip().lower():
+                hi = i
+                break
+        if hi is None:
+            return None
+        devs = query_devices()
+        for d in devs:
+            if int(d.get("hostapi", -1)) != hi:
+                continue
+            if direction == "input" and ((int(d.get("max_input_channels", 0) or 0) > 0)):
+                return int(d.get("index", -1))
+            if direction == "output" and ((int(d.get("max_output_channels", 0) or 0) > 0)):
+                return int(d.get("index", -1))
+        for d in devs:
+            if int(d.get("hostapi", -1)) == hi:
+                return int(d.get("index", -1))
+    except Exception:
+        pass
+    return None
 
 
 def stop() -> None:
@@ -1003,8 +1059,8 @@ def rec_monitor(
     samplerate: Optional[int] = None,
     channels: Optional[int] = None,
     hostapi: Optional[str] = None,
-    device_in: Optional[str] = None,
-    device_out: Optional[str] = None,
+    device_in: Optional[int] = None,
+    device_out: Optional[int] = None,
     rb_seconds: Optional[int] = None,
 ) -> Union[np.ndarray, RecordingHandle]:
     """Record while monitoring (listen-through) for a fixed duration.
@@ -1023,10 +1079,10 @@ def rec_monitor(
             Format: int or None.
         hostapi: Host API display name, e.g. "MME", "Windows WASAPI".
             Format: str or None.
-        device_in: Input device name (exact or partial match depends on engine).
-            Format: str or None.
-        device_out: Output device name used for monitoring playback.
-            Format: str or None.
+        device_in: Input device index (global index from query_devices()). None = use default.
+            Only int is accepted; device names are not supported.
+        device_out: Output device index used for monitoring playback. None = use default.
+            Only int is accepted.
         rb_seconds: Ring buffer size in seconds; larger reduces overrun risk.
             Format: int or None.
 
@@ -1050,9 +1106,6 @@ def rec_monitor(
     if save_wav and not wav_path:
         raise ValueError("save_wav=True requires a non-empty wav_path")
     wav_path_abs = os.path.abspath(wav_path) if (save_wav and wav_path) else ""
-
-    dev_in = default.device_in if device_in is None else str(device_in)
-    dev_out = default.device_out if device_out is None else str(device_out)
 
     rb_send = int(rb_seconds if rb_seconds is not None else default.rb_seconds)
     rb_send = max(rb_send, int(np.ceil(dur)) + 1, 2)
@@ -1230,7 +1283,7 @@ def _rec_engine(
     samplerate: Optional[int] = None,
     channels: Optional[int] = None,
     hostapi: Optional[str] = None,
-    device_in: Optional[str] = None,
+    device_in: Optional[int] = None,
     rb_seconds: Optional[int] = None,
 ) -> Union[np.ndarray, RecordingHandle]:
     """Start an engine recording session.
@@ -1243,7 +1296,7 @@ def _rec_engine(
         samplerate (Optional[int]): Samplerate in Hz.
         channels (Optional[int]): Number of input channels.
         hostapi (Optional[str]): Host API display name.
-        device_in (Optional[str]): Input device name.
+        device_in (Optional[int]): Input device index (global index from query_devices()). None = use default. Only int accepted.
         rb_seconds (Optional[int]): Ringbuffer size in seconds.
 
     Returns:
@@ -1321,7 +1374,7 @@ def _play_engine(
     blocking: bool = True,
     samplerate: Optional[int] = None,
     hostapi: Optional[str] = None,
-    device_out: Optional[str] = None,
+    device_out: Optional[int] = None,
     rb_seconds: Optional[int] = None,
     chunk_frames: int = 4096,
 ) -> None:
@@ -1332,7 +1385,7 @@ def _play_engine(
         blocking (bool): If True, wait until playback finishes.
         samplerate (Optional[int]): Samplerate in Hz.
         hostapi (Optional[str]): Host API display name.
-        device_out (Optional[str]): Output device name.
+        device_out (Optional[int]): Output device index (global index from query_devices()). None = use default. Only int accepted.
         rb_seconds (Optional[int]): Engine ringbuffer size in seconds.
         chunk_frames (int): Chunk size (frames) per network write.
 
@@ -1412,8 +1465,8 @@ def _playrec_engine(
     samplerate: Optional[int] = None,
     in_channels: Optional[int] = None,
     hostapi: Optional[str] = None,
-    device_in: Optional[str] = None,
-    device_out: Optional[str] = None,
+    device_in: Optional[int] = None,
+    device_out: Optional[int] = None,
     rb_seconds: Optional[int] = None,
     chunk_frames: int = 4096,
 ) -> np.ndarray:
@@ -1427,8 +1480,8 @@ def _playrec_engine(
         samplerate (Optional[int]): Samplerate in Hz.
         in_channels (Optional[int]): Input channels to record.
         hostapi (Optional[str]): Host API display name.
-        device_in (Optional[str]): Input device name.
-        device_out (Optional[str]): Output device name.
+        device_in (Optional[int]): Input device index (global index from query_devices()). None = use default. Only int accepted.
+        device_out (Optional[int]): Output device index. None = use default. Only int accepted.
         rb_seconds (Optional[int]): Engine ringbuffer size in seconds.
         chunk_frames (int): Chunk size (frames) per network write.
 
@@ -1550,6 +1603,9 @@ def _playrec_engine(
     x = np.concatenate(chunks, axis=0)
     if blocking and frames > 0 and x.shape[0] > int(frames):
         x = x[: int(frames)]
+    # Ensure saved WAV matches returned array length and samplerate (engine may write different SR/duration).
+    if save_wav and wav_path_abs and x.shape[0] > 0:
+        _write_wav_from_float32(wav_path_abs, x, fs)
     return x
 
 
@@ -1792,17 +1848,17 @@ def rec(frames=None, samplerate=None, channels=None, dtype=None, out=None, mappi
         if out_arr.shape[0] != frames_i:
             raise ValueError("out has incompatible number of frames")
 
-    dev_in_name = ""
-    hostapi_name = hostapi_override or str(getattr(default, "hostapi_name", "") or "MME")
-
+    # Use device index so _rec_engine can resolve to name for the engine (device_in must be int).
     in_idx = _device_index_from_any(device_kw, "input")
     if in_idx is None:
-        try:
-            in_idx = int(default.device[0])
-        except Exception:
-            in_idx = None
-    if in_idx is not None and in_idx >= 0:
-        hostapi_name, dev_in_name = _device_name_from_index(int(in_idx))
+        def_in = int(getattr(default, "device_in", -1))
+        if def_in >= 0:
+            in_idx = def_in
+        else:
+            try:
+                in_idx = int(default.device[0])
+            except Exception:
+                in_idx = None
 
     def _do_record() -> np.ndarray:
         y = _rec_engine(
@@ -1812,8 +1868,8 @@ def rec(frames=None, samplerate=None, channels=None, dtype=None, out=None, mappi
             blocking=True,
             samplerate=int(fs),
             channels=int(ch_i),
-            hostapi=hostapi_name,
-            device_in=dev_in_name,
+            hostapi=hostapi_override or None,
+            device_in=in_idx,
             rb_seconds=rb_seconds,
         )
         assert isinstance(y, np.ndarray)
@@ -2470,7 +2526,7 @@ def rec_long(
     samplerate: Optional[int] = None,
     channels: Optional[int] = None,
     hostapi: Optional[str] = None,
-    device_in: Optional[str] = None,
+    device_in: Optional[int] = None,
     rb_seconds: Optional[int] = None,
 ) -> LongRecordingHandle:
     """Record continuously to disk and rotate files periodically.
@@ -2486,8 +2542,7 @@ def rec_long(
             Format: int or None.
         hostapi: Host API display name.
             Format: str or None.
-        device_in: Input device name.
-            Format: str or None.
+        device_in: Input device index (global index from query_devices()). None = use default. Only int accepted.
         rb_seconds: Engine ring buffer size in seconds.
             Format: int or None.
 
@@ -2531,4 +2586,3 @@ def rec_long(
     )
 
     return LongRecordingHandle(path=path_abs, _proc=proc, _client=c)
-

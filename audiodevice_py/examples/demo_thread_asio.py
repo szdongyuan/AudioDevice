@@ -13,25 +13,37 @@ engine_path = current_file.parent.parent / "audiodevice.exe"
 ENGINE_EXE = str(engine_path)
 
 
-def _pick_asio_device_name(direction: str) -> str:
-    devs = ad.query_devices_raw(hostapi="ASIO", direction=direction)["devices"]
-    names = [d.get("name", "") for d in devs]
-    if not names:
+def _pick_asio_device_index(direction: str) -> int:
+    """Return global device index for preferred ASIO input device. -1 if none.
+    Uses query_devices() so index is the global index required by default.device_in / rec(device_in=...).
+    """
+    hostapis = ad.query_hostapis()
+    asio_hi = None
+    for i, h in enumerate(hostapis):
+        if (str(h.get("name") or "").strip().upper() == "ASIO"):
+            asio_hi = i
+            break
+    if asio_hi is None:
+        return -1
+    all_devs = ad.query_devices()
+    candidates = [d for d in all_devs if int(d.get("hostapi", -1)) == asio_hi and (int(d.get("max_input_channels", 0) or 0) > 0]
+    if not candidates:
         print("[warning] 未发现 ASIO 输入设备，请检查 ASIO4ALL/声卡 是否已选择输入通道")
-        return ""
+        return -1
     for prefer in ("UMC", "ASIO"):
-        for n in names:
-            if prefer.lower() in str(n).lower():
-                return str(n)
-    return str(names[0])
+        for d in candidates:
+            name = str(d.get("name", "") or "")
+            if prefer.lower() in name.lower():
+                return int(d.get("index", -1))
+    return int(candidates[0].get("index", -1))
 
 
 def _try_rec_asio(
     wav_path: str,
-    device_in: str,
+    device_in: int,
 ) -> Tuple[Optional[object], Optional[Exception]]:
     # Try common sr/ch pairs. ASIO devices tend to like 48k.
-    # 使用整数帧数 sr*5，避免引擎把 5.0(秒) 误解析为 5 帧导致只录 5 个采样
+    # device_in is device index (int only); device names are not supported.
     duration_seconds = 5
     tried = []
     last_err: Optional[Exception] = None
@@ -61,9 +73,9 @@ def worker_record_asio() -> None:
     wav_path = os.path.join(out_dir, "thread_asio_rec.wav")
 
     try:
-        device_in = _pick_asio_device_name("input")
-        print("[worker] ASIO device_in:", device_in or "<default>")
-        if not device_in.strip():
+        device_in = _pick_asio_device_index("input")
+        print("[worker] ASIO device_in (index):", device_in if device_in >= 0 else "<default>")
+        if device_in < 0:
             raise RuntimeError("未找到 ASIO 输入设备。请安装/启用 ASIO 驱动并在 ASIO4ALL 中勾选输入通道。")
         y, err = _try_rec_asio(wav_path, device_in=device_in)
         if err is not None:
@@ -93,8 +105,13 @@ def main() -> None:
         ad.default.engine_exe = ENGINE_EXE
         ad.default.engine_cwd = os.path.dirname(ENGINE_EXE)
 
-    # We want to demonstrate ASIO in a background thread.
-    ad.default.hostapi = "ASIO"
+    # Ensure engine and device list are ready (needed for _pick_asio_device_index).
+    ad.init()
+
+    # We want to demonstrate ASIO in a background thread. hostapi is read-only; set device to an ASIO device.
+    idx = _pick_asio_device_index("input")
+    if idx >= 0:
+        ad.default.device = (idx, idx)
 
     # 先在主线程启动引擎并查询设备，避免子线程里首次调用时引擎未就绪
     ad.print_default_devices()

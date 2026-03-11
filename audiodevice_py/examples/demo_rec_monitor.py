@@ -28,18 +28,17 @@ def main() -> None:
 
     wav_path = os.path.join(os.path.dirname(__file__), "rec_monitor.wav")
 
-    # Same style as demo_rec.py
-    ad.default.hostapi = "ASIO"
+    # Same style as demo_rec.py. device_in / device_out accept only int. hostapi is read-only (follows from device_in/device_out).
     ad.default.samplerate = 48_000
     ad.default.channels = 2
-    # ad.default.device_in = "ASIO4ALL"
-    ad.default.device_in = "UMC ASIO Driver"
-    # For ASIO, monitor/duplex typically expects the same device.
+    # Set by index, e.g. from ad.query_devices() or ad.print_default_devices().
+    # ad.default.device_in = 0   # ASIO4ALL
+    ad.default.device_in = 0     # UMC ASIO Driver (use your actual index)
     ad.default.device_out = ad.default.device_in
 
     print("hostapi:", ad.default.hostapi)
-    print("device_in:", ad.default.device_in or "<default>")
-    print("device_out:", ad.default.device_out or "<default>")
+    print("device_in:", ad.default.device_in if ad.default.device_in >= 0 else "<default>")
+    print("device_out:", ad.default.device_out if ad.default.device_out >= 0 else "<default>")
 
     x = ad.rec_monitor(
         10.0,  # seconds

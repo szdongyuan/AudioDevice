@@ -27,10 +27,14 @@ def main() -> None:
         ad.default.engine_exe = ENGINE_EXE
         ad.default.engine_cwd = os.path.dirname(ENGINE_EXE)
 
+    ad.init()
+
     # Note: CPAL+ASIO works well for input-only (rec) or output-only (play),
     # but full-duplex playrec may produce zero input frames on some ASIO drivers.
-    # WASAPI is the most compatible hostapi for duplex on Windows.
-    ad.default.hostapi = "WASAPI"
+    # WASAPI is the most compatible hostapi for duplex on Windows. hostapi is read-only; set device to change it.
+    idx = ad.device_index_for_hostapi("WASAPI", "input")
+    if idx is not None:
+        ad.default.device = (idx, idx)
     ad.default.samplerate = 48_000
     ad.default.channels = 2
 

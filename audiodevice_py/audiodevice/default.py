@@ -33,7 +33,7 @@ class DefaultConfig:
     port: int = 18789
 
     # audiodevice-compatible default properties:
-    # - default.hostapi is an index (int)
+    # - default.hostapi is read-only (int index); derived from device / device_in / device_out
     # - default.samplerate is Optional[float] (None means "unspecified")
     # - default.channels is a pair (in, out), each Optional[int]
     hostapi_name: str = "MME"
@@ -48,9 +48,9 @@ class DefaultConfig:
     # -1 means "unspecified".
     device: Tuple[int, int] = (-1, -1)
 
-    # Non-audiodevice extras (kept for convenience/back-compat):
-    device_in: str = ""
-    device_out: str = ""
+    # Optional override: input/output device index (int only). -1 = use default.device or hostapi default.
+    device_in: int = -1
+    device_out: int = -1
 
     rb_seconds: int = 2
 
@@ -84,73 +84,34 @@ class _DefaultHolder:
             return int(d[0]), int(d[1])
         return -1, -1
 
+    def _sync_hostapi_from_device_index(self, idx: int) -> None:
+        """Update hostapi_index and hostapi_name from the given device index (read-only hostapi is derived from device)."""
+        if idx is None or idx < 0:
+            return
+        try:
+            from .api import query_devices, query_hostapis
+
+            d = query_devices(int(idx))
+            hi = int(d.get("hostapi", -1))
+            if hi < 0:
+                return
+            h = query_hostapis(hi)
+            self._cfg.hostapi_index = hi
+            self._cfg.hostapi_name = str(h.get("name", self._cfg.hostapi_name))
+        except Exception:
+            pass
+
     @property
     def hostapi(self) -> int:
-        """Return the default host API index."""
+        """Return the default host API index (read-only). Derived from current default.device / device_in / device_out."""
         return int(getattr(self._cfg, "hostapi_index", 0) or 0)
 
     @hostapi.setter
     def hostapi(self, value) -> None:
-        """Set the default host API.
-
-        Args:
-            value (int | str | None): Host API index, host API name, or None to reset index.
-
-        Raises:
-            TypeError: If `value` is not int/str/None.
-            ValueError: If a provided name is empty.
-        """
-        if value is None:
-            self._cfg.hostapi_index = 0
-            # Keep name as-is; it will be resolved lazily when possible.
-            return
-        if isinstance(value, int):
-            self._cfg.hostapi_index = int(value)
-            try:
-                from .api import query_hostapis
-
-                h = query_hostapis(int(value))
-                self._cfg.hostapi_name = str(h.get("name", self._cfg.hostapi_name))
-            except Exception:
-                pass
-            return
-        if isinstance(value, str):
-            name = value.strip()
-            if not name:
-                raise ValueError("default.hostapi name must be non-empty")
-            try:
-                from .api import query_hostapis
-
-                hs = query_hostapis()
-                want_raw = name.strip()
-
-                def _canon(x: str) -> str:
-                    s = str(x or "").strip().lower()
-                    if s.startswith("windows "):
-                        s = s[len("windows ") :].strip()
-                    # normalize common whitespace/aliases
-                    s = " ".join(s.split())
-                    return s
-
-                want = _canon(want_raw)
-                matched_name = None
-                for i, h in enumerate(hs):
-                    hn = str(h.get("name", "")).strip()
-                    if not hn:
-                        continue
-                    if _canon(hn) == want:
-                        self._cfg.hostapi_index = int(i)
-                        matched_name = hn
-                        break
-
-                # Keep a consistent display name if we matched; otherwise preserve user input.
-                self._cfg.hostapi_name = matched_name if matched_name is not None else want_raw
-            except Exception:
-                # Preserve user input as the display name; index remains unchanged.
-                self._cfg.hostapi_name = name
-                pass
-            return
-        raise TypeError("default.hostapi must be int, str, or None")
+        """hostapi is read-only. Set default.device (or device_in / device_out) to change the effective host API."""
+        raise AttributeError(
+            "default.hostapi is read-only; set default.device (or device_in/device_out) by device index to change host API"
+        )
 
     @property
     def channels(self) -> _InputOutputPair:
@@ -272,9 +233,10 @@ class _DefaultHolder:
 
     @property
     def device(self) -> _InputOutputPair:
-        """Return the default device selection as an `(input, output)` pair.
+        """Return the default device selection as (input_index, output_index).
 
-        This is lazily resolved on first access, similar to `sounddevice.default.device`.
+        Only integer indices are stored; device names are not supported.
+        This is lazily resolved on first access when indices are (-1, -1).
         """
         # Lazy-initialize to something meaningful on first access, similar to sd.default.device.
         if getattr(self, "_resolving_device", False):
@@ -286,8 +248,8 @@ class _DefaultHolder:
             and len(self._cfg.device) == 2
             and int(self._cfg.device[0]) == -1
             and int(self._cfg.device[1]) == -1
-            and not str(self._cfg.device_in or "")
-            and not str(self._cfg.device_out or "")
+            and int(getattr(self._cfg, "device_in", -1)) < 0
+            and int(getattr(self._cfg, "device_out", -1)) < 0
         ):
             try:
                 super().__setattr__("_resolving_device", True)
@@ -316,52 +278,66 @@ class _DefaultHolder:
         di, do = self._cfg.device if isinstance(self._cfg.device, tuple) and len(self._cfg.device) == 2 else (-1, -1)
         return _InputOutputPair(int(di), int(do))
 
+    @property
+    def device_in(self) -> int:
+        """Default input device index. -1 means unspecified (use default.device[0] or hostapi default)."""
+        return int(getattr(self._cfg, "device_in", -1))
+
+    @device_in.setter
+    def device_in(self, value: int) -> None:
+        """Set default input device by index only (int). -1 = unspecified. Updates effective hostapi from this device."""
+        if not isinstance(value, int):
+            raise TypeError("default.device_in must be int (device index); -1 means unspecified")
+        self._cfg.device_in = int(value)
+        self._sync_hostapi_from_device_index(self._cfg.device_in)
+
+    @property
+    def device_out(self) -> int:
+        """Default output device index. -1 means unspecified (use default.device[1] or hostapi default)."""
+        return int(getattr(self._cfg, "device_out", -1))
+
+    @device_out.setter
+    def device_out(self, value: int) -> None:
+        """Set default output device by index only (int). -1 = unspecified. Updates effective hostapi from this device."""
+        if not isinstance(value, int):
+            raise TypeError("default.device_out must be int (device index); -1 means unspecified")
+        self._cfg.device_out = int(value)
+        self._sync_hostapi_from_device_index(self._cfg.device_out)
+
     @device.setter
     def device(self, value: Union[int, Sequence[int], None]) -> None:
-        """Set the default device selection.
+        """Set the default device selection by index only.
 
         Args:
-            value (int | str | Sequence[int] | None): A global device index, a device name
-                (exact/substring match), a 2-tuple/list `(input, output)`, or None to reset.
+            value (int | Sequence[int] | None): A single device index (input and output),
+                a 2-tuple/list `(input_index, output_index)`, or None to reset.
+                Only integer indices are accepted; device names are not supported.
 
         Raises:
-            TypeError: If `value` has an unsupported type/shape.
-            ValueError: If a provided device name is empty or not found.
+            TypeError: If `value` is not int, (int, int), or None.
         """
-        if isinstance(value, str):
-            name = value.strip()
-            if not name:
-                raise ValueError("default.device name must be non-empty")
-            # Local import to avoid circular import at module load.
-            from .api import query_devices
-
-            d = query_devices(name)
-            if not isinstance(d, dict) or "index" not in d:
-                raise ValueError(f"device not found: {value}")
-            di = int(d["index"])
-            self._cfg.device = (di, di)
-            self._cfg.device_in = ""
-            self._cfg.device_out = ""
-            return
         if value is None:
             self._cfg.device = (-1, -1)
-            self._cfg.device_in = ""
-            self._cfg.device_out = ""
+            self._cfg.device_in = -1
+            self._cfg.device_out = -1
             return
         if isinstance(value, int):
             di = int(value)
             self._cfg.device = (di, di)
-            self._cfg.device_in = ""
-            self._cfg.device_out = ""
+            self._cfg.device_in = -1
+            self._cfg.device_out = -1
+            self._sync_hostapi_from_device_index(di)
             return
         if isinstance(value, (list, tuple)) and len(value) == 2:
             di = int(value[0])
             do = int(value[1])
             self._cfg.device = (di, do)
-            self._cfg.device_in = ""
-            self._cfg.device_out = ""
+            self._cfg.device_in = -1
+            self._cfg.device_out = -1
+            # Derive hostapi from input device (or output if input unspecified)
+            self._sync_hostapi_from_device_index(di if di >= 0 else do)
             return
-        raise TypeError("default.device must be int, (in, out), or None")
+        raise TypeError("default.device must be int, (in, out), or None; device names are not supported")
 
     def reset(self) -> None:
         """Reset defaults to audiodevice-like defaults."""
@@ -372,8 +348,8 @@ class _DefaultHolder:
         self._cfg.dtype = ("float32", "float32")
         self._cfg.latency = (None, None)
         self._cfg.device = (-1, -1)
-        self._cfg.device_in = ""
-        self._cfg.device_out = ""
+        self._cfg.device_in = -1
+        self._cfg.device_out = -1
 
     def __getattr__(self, name: str):
         """Forward attribute access to the underlying config dataclass."""
@@ -404,6 +380,12 @@ class _DefaultHolder:
             return
         if name == "latency":
             type(self).latency.fset(self, value)
+            return
+        if name == "device_in":
+            type(self).device_in.fset(self, value)
+            return
+        if name == "device_out":
+            type(self).device_out.fset(self, value)
             return
         setattr(self._cfg, name, value)
 
