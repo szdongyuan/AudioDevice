@@ -28,15 +28,8 @@ audiodevice_py/build/
 //audiodevice_py/dist/
 audiodevice_py/*.egg-info/
 
-# Local engine artifacts that should not be versioned
-audiodevice_py/*.exe
-audiodevice_py/*.dll
-audiodevice_py/portaudio.dll
-
-# If you intentionally bundle engine artifacts into the Python package, keep them:
-!audiodevice_py/audiodevice/bin/
-!audiodevice_py/audiodevice/bin/*.exe
-!audiodevice_py/audiodevice/bin/*.dll
+# Local engine artifacts
+# NOTE: These are intentionally versioned (upload to GitHub), so do NOT ignore them.
 
 # ===== Rust / Cargo =====
 **/target/
@@ -63,8 +56,9 @@ audio_engine/src/record.pkf
 # ===== Repo packaging outputs =====
 dist/staging/
 dist/*.zip
+!dist/release_*.zip
+!dist/release_20260311_132624.zip
 !dist/audiodevice_engine_win64_*.zip
 
 # Local extracted engine folders (from ZIP) and loose DLLs
 dist/audiodevice_engine_win64_*/
-portaudio.dll
