@@ -11,6 +11,11 @@ from typing import Optional, Tuple
 
 
 def _windows_local_appdata_dir() -> str:
+    """Return the Windows LOCALAPPDATA directory (best-effort).
+
+    Returns:
+        str: Absolute path to LOCALAPPDATA, with a fallback for unusual setups.
+    """
     base = os.environ.get("LOCALAPPDATA")
     if base:
         return base
@@ -19,10 +24,23 @@ def _windows_local_appdata_dir() -> str:
 
 
 def engine_cache_dir() -> str:
+    """Return the directory used to cache engine artifacts.
+
+    Returns:
+        str: Cache directory path.
+    """
     return os.path.join(_windows_local_appdata_dir(), "audiodevice", "engine")
 
 
 def _sha256_file(path: str) -> str:
+    """Compute SHA-256 digest of a file.
+
+    Args:
+        path (str): Path to a local file.
+
+    Returns:
+        str: Lowercase hex SHA-256 digest.
+    """
     h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -31,8 +49,11 @@ def _sha256_file(path: str) -> str:
 
 
 def bundled_engine_paths() -> Tuple[Optional[str], Optional[str]]:
-    """
-    Return (engine_exe_path, portaudio_dll_path) if bundled in wheel/site-packages, else (None, None).
+    """Locate engine binaries bundled with the Python package (wheel).
+
+    Returns:
+        tuple[Optional[str], Optional[str]]: `(engine_exe_path, portaudio_dll_path)` if
+        present in site-packages, otherwise `(None, None)`.
     """
     try:
         from importlib import resources as importlib_resources  # py3.10+
@@ -48,8 +69,10 @@ def bundled_engine_paths() -> Tuple[Optional[str], Optional[str]]:
 
 
 def dev_engine_path_guess() -> Optional[str]:
-    """
-    Helpful for editable installs from the monorepo.
+    """Guess engine path for editable installs from the monorepo.
+
+    Returns:
+        Optional[str]: Absolute path to a dev-built `audiodevice.exe`, or None if not found.
     """
     here = os.path.abspath(os.path.dirname(__file__))
     # audiodevice_py/audiodevice -> ../../audio_engine/target/release/audiodevice.exe
@@ -63,15 +86,22 @@ def ensure_engine_available(
     download_url: str = "",
     sha256: str = "",
 ) -> str:
-    """
-    Ensure we have a runnable engine executable. Returns the absolute path to the exe.
+    """Ensure a runnable engine executable exists and return its absolute path.
 
-    Resolution order:
-    - If engine_exe exists as path, use it.
-    - If engine_exe can be found on PATH (shutil.which), use it.
-    - If bundled with the Python package (wheel), use bundled exe.
-    - If running from repo (editable), use guessed dev path.
-    - If download_url is provided (or via env AUDIODEVICE_ENGINE_URL), download+install to cache.
+    Args:
+        engine_exe (str): File name or path to the engine executable (typically
+            `"audiodevice.exe"`). If empty, defaults to `"audiodevice.exe"`.
+        download_url (str): Optional URL or local file path to a `.zip` or `.exe` engine
+            artifact. If empty, falls back to env `AUDIODEVICE_ENGINE_URL`.
+        sha256 (str): Optional SHA-256 checksum for the downloaded artifact. If empty,
+            falls back to env `AUDIODEVICE_ENGINE_SHA256`.
+
+    Returns:
+        str: Absolute path to the resolved engine executable.
+
+    Raises:
+        FileNotFoundError: If the engine cannot be found and no download URL is provided.
+        RuntimeError: If checksum validation fails or the artifact format is invalid.
     """
     if not engine_exe:
         engine_exe = "audiodevice.exe"

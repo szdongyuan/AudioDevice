@@ -23,6 +23,7 @@ venv/
 ENV/
 
 # Packaging / build outputs (Python SDK)
+audiodevice_py/examples/test.py
 audiodevice_py/build/
 //audiodevice_py/dist/
 audiodevice_py/*.egg-info/

@@ -1,6 +1,4 @@
 param(
-  [string]$Profile = "release",
-  [switch]$IncludePortAudio,
   [string]$OutZip = ""
 )
 
@@ -12,23 +10,20 @@ function Require-File([string]$p) {
   }
 }
 
-$repo = Split-Path -Parent $PSScriptRoot
-$engineDir = Join-Path $repo "audio_engine"
-$binDir = Join-Path $engineDir "target\$Profile"
-
+# 固定从 audiodevice_dy 的 release 构建目录取文件
+$binDir = "E:\2026\3\audiodevice_dy\audio_engine\target\release"
 $exe = Join-Path $binDir "audiodevice.exe"
-Require-File $exe
-
 $paDll = Join-Path $binDir "portaudio.dll"
-$hasPa = Test-Path -LiteralPath $paDll
+Require-File $exe
+Require-File $paDll
 
-if ($IncludePortAudio -and -not $hasPa) {
-  throw "IncludePortAudio specified but portaudio.dll not found at: $paDll"
-}
-
+$stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 if ([string]::IsNullOrWhiteSpace($OutZip)) {
-  $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
   $OutZip = Join-Path $PSScriptRoot ("audiodevice_engine_win64_{0}.zip" -f $stamp)
+} else {
+  $outDir = Split-Path -Parent $OutZip
+  $baseName = [System.IO.Path]::GetFileNameWithoutExtension($OutZip)
+  $OutZip = Join-Path $outDir ("{0}_{1}.zip" -f $baseName, $stamp)
 }
 
 $stage = Join-Path $PSScriptRoot "staging"
@@ -36,12 +31,7 @@ if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Path $stage | Out-Null
 
 Copy-Item -LiteralPath $exe -Destination (Join-Path $stage "audiodevice.exe") -Force
-
-if ($IncludePortAudio -or $hasPa) {
-  if ($hasPa) {
-    Copy-Item -LiteralPath $paDll -Destination (Join-Path $stage "portaudio.dll") -Force
-  }
-}
+Copy-Item -LiteralPath $paDll -Destination (Join-Path $stage "portaudio.dll") -Force
 
 # Docs (kept in repo under dist/)
 $readme = Join-Path $PSScriptRoot "README_ENGINE.md"

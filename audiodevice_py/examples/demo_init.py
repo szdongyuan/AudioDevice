@@ -27,7 +27,10 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(root_dir))
     import audiodevice as ad
 
+# 引擎位置：仓库里可能在根目录或 audiodevice/bin/
 engine_path = root_dir / "audiodevice.exe"
+if not engine_path.is_file():
+    engine_path = root_dir / "audiodevice" / "bin" / "audiodevice.exe"
 
 # ---------- 方式一：脚本/命令行里直接初始化（会阻塞几秒） ----------
 if engine_path.is_file():

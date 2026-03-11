@@ -7,19 +7,28 @@ from typing import Optional, Sequence, Tuple, Union
 class _InputOutputPair(list):
     # Mimic audiodevice._InputOutputPair repr/shape (prints like [in, out]).
     def __init__(self, input_value=None, output_value=None) -> None:
+        """Create an (input, output) pair container.
+
+        Args:
+            input_value (Any): Input-side value.
+            output_value (Any): Output-side value.
+        """
         super().__init__([input_value, output_value])
 
     @property
     def input(self):
+        """Return the input-side value."""
         return self[0]
 
     @property
     def output(self):
+        """Return the output-side value."""
         return self[1]
 
 
 @dataclass
 class DefaultConfig:
+    """Global default configuration for the audiodevice compatibility layer."""
     host: str = "127.0.0.1"
     port: int = 18789
 
@@ -60,10 +69,16 @@ class DefaultConfig:
 
 class _DefaultHolder:
     def __init__(self) -> None:
+        """Create a holder that mimics `sounddevice.default` behavior."""
         super().__setattr__("_cfg", DefaultConfig())
         super().__setattr__("_resolving_device", False)
 
     def _device_tuple_raw(self) -> Tuple[int, int]:
+        """Return raw `(input_index, output_index)` from `default.device`.
+
+        Returns:
+            tuple[int, int]: Device indices, where -1 means "unspecified".
+        """
         d = getattr(self._cfg, "device", (-1, -1))
         if isinstance(d, tuple) and len(d) == 2:
             return int(d[0]), int(d[1])
@@ -71,10 +86,20 @@ class _DefaultHolder:
 
     @property
     def hostapi(self) -> int:
+        """Return the default host API index."""
         return int(getattr(self._cfg, "hostapi_index", 0) or 0)
 
     @hostapi.setter
     def hostapi(self, value) -> None:
+        """Set the default host API.
+
+        Args:
+            value (int | str | None): Host API index, host API name, or None to reset index.
+
+        Raises:
+            TypeError: If `value` is not int/str/None.
+            ValueError: If a provided name is empty.
+        """
         if value is None:
             self._cfg.hostapi_index = 0
             # Keep name as-is; it will be resolved lazily when possible.
@@ -129,6 +154,7 @@ class _DefaultHolder:
 
     @property
     def channels(self) -> _InputOutputPair:
+        """Return default `(input_channels, output_channels)`."""
         ch = getattr(self._cfg, "channels", (None, None))
         if not isinstance(ch, tuple) or len(ch) != 2:
             ch = (None, None)
@@ -136,6 +162,14 @@ class _DefaultHolder:
 
     @channels.setter
     def channels(self, value) -> None:
+        """Set default channels.
+
+        Args:
+            value (int | tuple[int|None, int|None] | None): Channel count(s).
+
+        Raises:
+            TypeError: If `value` is not supported.
+        """
         if value is None:
             self._cfg.channels = (None, None)
             return
@@ -151,11 +185,17 @@ class _DefaultHolder:
 
     @property
     def samplerate(self) -> Optional[float]:
+        """Return the default samplerate (Hz), or None if unspecified."""
         sr = getattr(self._cfg, "samplerate", None)
         return None if sr is None else float(sr)
 
     @samplerate.setter
     def samplerate(self, value) -> None:
+        """Set the default samplerate.
+
+        Args:
+            value (float | None): Samplerate in Hz, or None for unspecified.
+        """
         if value is None:
             self._cfg.samplerate = None
             return
@@ -163,6 +203,7 @@ class _DefaultHolder:
 
     @property
     def dtype(self) -> _InputOutputPair:
+        """Return the default `(input_dtype, output_dtype)` pair."""
         dt = getattr(self._cfg, "dtype", (None, None))
         if not isinstance(dt, tuple) or len(dt) != 2:
             dt = (None, None)
@@ -170,6 +211,14 @@ class _DefaultHolder:
 
     @dtype.setter
     def dtype(self, value) -> None:
+        """Set default dtype.
+
+        Args:
+            value (str | tuple[str|None, str|None] | None): Dtype name(s), or None.
+
+        Raises:
+            TypeError: If `value` is not supported.
+        """
         if value is None:
             self._cfg.dtype = (None, None)
             return
@@ -186,6 +235,7 @@ class _DefaultHolder:
 
     @property
     def latency(self) -> _InputOutputPair:
+        """Return the default `(input_latency, output_latency)` pair."""
         lat = getattr(self._cfg, "latency", (None, None))
         if not isinstance(lat, tuple) or len(lat) != 2:
             lat = (None, None)
@@ -193,6 +243,14 @@ class _DefaultHolder:
 
     @latency.setter
     def latency(self, value) -> None:
+        """Set default latency.
+
+        Args:
+            value (str | float | tuple[Any, Any] | None): Latency setting(s).
+
+        Raises:
+            TypeError: If `value` is not supported.
+        """
         if value is None:
             self._cfg.latency = (None, None)
             return
@@ -214,6 +272,10 @@ class _DefaultHolder:
 
     @property
     def device(self) -> _InputOutputPair:
+        """Return the default device selection as an `(input, output)` pair.
+
+        This is lazily resolved on first access, similar to `sounddevice.default.device`.
+        """
         # Lazy-initialize to something meaningful on first access, similar to sd.default.device.
         if getattr(self, "_resolving_device", False):
             di, do = self._device_tuple_raw()
@@ -256,6 +318,16 @@ class _DefaultHolder:
 
     @device.setter
     def device(self, value: Union[int, Sequence[int], None]) -> None:
+        """Set the default device selection.
+
+        Args:
+            value (int | str | Sequence[int] | None): A global device index, a device name
+                (exact/substring match), a 2-tuple/list `(input, output)`, or None to reset.
+
+        Raises:
+            TypeError: If `value` has an unsupported type/shape.
+            ValueError: If a provided device name is empty or not found.
+        """
         if isinstance(value, str):
             name = value.strip()
             if not name:
@@ -304,9 +376,11 @@ class _DefaultHolder:
         self._cfg.device_out = ""
 
     def __getattr__(self, name: str):
+        """Forward attribute access to the underlying config dataclass."""
         return getattr(self._cfg, name)
 
     def __setattr__(self, name: str, value) -> None:
+        """Set a default attribute with property-aware routing."""
         if name == "_cfg":
             super().__setattr__(name, value)
             return
@@ -334,6 +408,7 @@ class _DefaultHolder:
         setattr(self._cfg, name, value)
 
     def as_dict(self) -> dict:
+        """Return a shallow dict copy of the current defaults."""
         return self._cfg.__dict__.copy()
 
 

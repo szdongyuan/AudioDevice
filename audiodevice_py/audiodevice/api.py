@@ -47,13 +47,29 @@ class DeviceList(list):
         default_input_index: Optional[int] = None,
         default_output_index: Optional[int] = None,
     ) -> None:
+        """Create a printable device list.
+
+        Args:
+            devices (Iterable[dict[str, Any]]): Device dictionaries (compatible with
+                `audiodevice.query_devices()` style).
+            hostapi_names (Optional[list[str]]): Optional host API names used for display.
+            default_input_index (Optional[int]): Index of the default input device.
+            default_output_index (Optional[int]): Index of the default output device.
+        """
         super().__init__(devices)
         self._hostapi_names = list(hostapi_names or [])
         self._default_input_index = default_input_index
         self._default_output_index = default_output_index
 
     def _hostapi_name_for_index(self, hi: int) -> str:
-        """与 query_hostapis() 一致：优先从 query_hostapis() 取 hostapi 名称，避免 Unknown。"""
+        """Resolve a host API name for a hostapi index.
+
+        Args:
+            hi (int): Host API index (as stored in device dicts).
+
+        Returns:
+            str: Display name for the host API, or "Unknown" when not resolvable.
+        """
         if hi < 0:
             return "Unknown"
         try:
@@ -92,6 +108,14 @@ class DeviceList(list):
 
 
 def _backend_for_hostapi(hostapi_name: str) -> str:
+    """Select the engine backend for a given host API name.
+
+    Args:
+        hostapi_name (str): Display host API name (e.g. "ASIO", "Windows WASAPI", "MME").
+
+    Returns:
+        str: Backend name understood by the engine ("cpal" or "portaudio").
+    """
     # Backend selection (no public backend parameter):
     # - ASIO -> cpal backend
     # - everything else exposed in the audiodevice-like layer -> portaudio backend
@@ -102,7 +126,14 @@ def _backend_for_hostapi(hostapi_name: str) -> str:
 
 
 def _hostapi_display_to_engine(hostapi_display: str) -> Tuple[str, str, str]:
-    """Map an audiodevice-like hostapi display name to (backend, engine_hostapi, display)."""
+    """Map display host API name to engine parameters.
+
+    Args:
+        hostapi_display (str): Public/display host API name (e.g. "Windows WASAPI").
+
+    Returns:
+        tuple[str, str, str]: `(backend, engine_hostapi, display_name)`.
+    """
     disp = str(hostapi_display or "").strip()
     if not disp:
         disp = "MME"
@@ -114,6 +145,15 @@ def _hostapi_display_to_engine(hostapi_display: str) -> Tuple[str, str, str]:
 
 
 def _resolve_device_from_default_index(which: str) -> Tuple[str, str]:
+    """Resolve device name from `default.device` indices.
+
+    Args:
+        which (str): "input" or "output".
+
+    Returns:
+        tuple[str, str]: `(hostapi_name, device_name)`; returns ("","") if unspecified
+        or resolution fails.
+    """
     # Returns (hostapi_name, device_name) or ("","") if unspecified.
     try:
         di, do = default._device_tuple_raw()
@@ -136,6 +176,19 @@ def _resolve_hostapi_and_devices(
     device_in: Optional[str],
     device_out: Optional[str],
 ) -> Tuple[str, str, str]:
+    """Resolve effective host API and device names.
+
+    Args:
+        hostapi (Optional[str]): Preferred host API display name.
+        device_in (Optional[str]): Preferred input device name.
+        device_out (Optional[str]): Preferred output device name.
+
+    Returns:
+        tuple[str, str, str]: `(hostapi_name, input_device_name, output_device_name)`.
+
+    Raises:
+        ValueError: If duplex defaults point to different host APIs.
+    """
     hostapi_eff = str(hostapi or getattr(default, "hostapi_name", "") or "MME")
 
     in_name = str(device_in).strip() if device_in is not None else ""
@@ -164,6 +217,14 @@ def _resolve_hostapi_and_devices(
     return hostapi_eff, in_name, out_name
 
 def _list_hostapis_raw_backend(backend: str) -> Dict[str, Any]:
+    """List host APIs for a specific backend.
+
+    Args:
+        backend (str): Engine backend ("portaudio" or "cpal").
+
+    Returns:
+        dict[str, Any]: Engine reply payload.
+    """
     proc = _ensure_engine_running()
     c = AudioDeviceClient(default.host, default.port, timeout=float(default.timeout))
     try:
@@ -174,6 +235,11 @@ def _list_hostapis_raw_backend(backend: str) -> Dict[str, Any]:
 
 
 def _hostapis_all() -> Tuple[List[str], Dict[str, List[str]]]:
+    """Return cached host API display names and a backend mapping.
+
+    Returns:
+        tuple[list[str], dict[str, list[str]]]: `(display_order, by_backend)`.
+    """
     global _CACHED_HOSTAPIS
     with _CACHE_LOCK:
         if _CACHED_HOSTAPIS is not None:
@@ -184,7 +250,14 @@ def _hostapis_all() -> Tuple[List[str], Dict[str, List[str]]]:
     order: List[str] = []
 
     def _hostapi_name_from_item(x: Any) -> str:
-        """引擎可能返回字符串或带 'name' 的 dict，统一成显示名。"""
+        """Normalize host API items returned by engine to a display name.
+
+        Args:
+            x (Any): Engine host API item (string or dict containing "name").
+
+        Returns:
+            str: A non-empty display name when possible.
+        """
         if isinstance(x, dict) and "name" in x:
             return str(x["name"]).strip() or str(x)
         return str(x).strip() if x is not None else ""
@@ -222,12 +295,22 @@ def _hostapis_all() -> Tuple[List[str], Dict[str, List[str]]]:
 
 
 def _cache_set_devices(devs: DeviceList) -> None:
+    """Store the device list cache.
+
+    Args:
+        devs (DeviceList): Cached device list.
+    """
     with _CACHE_LOCK:
         global _CACHED_DEVICES
         _CACHED_DEVICES = devs
 
 
 def _cache_get_devices() -> Optional[DeviceList]:
+    """Get the cached device list (if any).
+
+    Returns:
+        Optional[DeviceList]: Cached device list, or None when not cached.
+    """
     with _CACHE_LOCK:
         return _CACHED_DEVICES
 
@@ -236,6 +319,12 @@ def init(*, engine_exe: Optional[str] = None, engine_cwd: Optional[str] = None, 
     """Initialize audiodevice (engine + caches).
 
     This is a convenience API (audiodevice doesn't require explicit init).
+
+    Args:
+        engine_exe (Optional[str]): Path to `audiodevice.exe`. If None, resolution falls back
+            to `default.engine_exe` and other discovery methods.
+        engine_cwd (Optional[str]): Working directory for the engine process.
+        timeout (Optional[float]): TCP RPC timeout (seconds) for engine requests.
     """
     if engine_exe is not None:
         default.engine_exe = str(engine_exe)
@@ -261,11 +350,17 @@ def init(*, engine_exe: Optional[str] = None, engine_cwd: Optional[str] = None, 
 
 
 def _initialize() -> None:
+    """Internal alias used by some audiodevice-like integrations."""
     init()
 
 
 def _terminate() -> None:
-    """Best-effort terminate current session and engine."""
+    """Best-effort terminate current session and engine.
+
+    This stops the current session (if any), terminates the engine process started by this
+    module, and clears caches. It does not guarantee termination if the engine was started
+    externally.
+    """
     stop()
     global _ENGINE_PROC
     with _ENGINE_LOCK:
@@ -283,18 +378,30 @@ def _terminate() -> None:
 
 
 def sleep(ms: int) -> None:
-    """audiodevice-compatible sleep(ms)."""
+    """Sleep for the given duration in milliseconds.
+
+    Args:
+        ms (int): Milliseconds to sleep.
+    """
     time.sleep(float(ms) / 1000.0)
 
 
 def get_stream():
-    """Return the current active stream (if any)."""
+    """Return the current active Stream object (if any).
+
+    Returns:
+        Any: The active stream instance (`Stream`, `InputStream`, or `OutputStream`), or None.
+    """
     with _GLOBAL_SESSION_LOCK:
         return _GLOBAL_STREAM
 
 
 def get_status() -> Optional[Dict[str, Any]]:
-    """Return engine status for current session (best-effort)."""
+    """Get the engine status for the current session (best-effort).
+
+    Returns:
+        Optional[dict[str, Any]]: Engine status payload, or None if unavailable.
+    """
     try:
         _ = _ensure_engine_running()
         c = AudioDeviceClient(default.host, default.port, timeout=default.timeout)
@@ -307,7 +414,10 @@ def get_status() -> Optional[Dict[str, Any]]:
 
 
 def print_default_devices() -> None:
-    """Print current default input and output device (index + name). Call after init()."""
+    """Print current default input and output device (index + name).
+
+    Call this after `init()` if you want to quickly verify device selection.
+    """
     try:
         di, do = default._device_tuple_raw()
         di, do = int(di), int(do)
@@ -326,7 +436,10 @@ def print_default_devices() -> None:
 
 
 def stop() -> None:
-    """Stop current playback/recording/stream (best-effort)."""
+    """Stop the current playback/recording/stream (best-effort).
+
+    This signals any tracked worker thread to stop and sends `session_stop` to the engine.
+    """
     with _GLOBAL_SESSION_LOCK:
         if _GLOBAL_SESSION_STOP is not None:
             _GLOBAL_SESSION_STOP.set()
@@ -343,7 +456,11 @@ def stop() -> None:
 
 
 def wait() -> None:
-    """Wait for the last non-blocking operation to finish."""
+    """Wait for the last non-blocking operation to finish.
+
+    Raises:
+        BaseException: Re-raises the exception captured from the worker thread (if any).
+    """
     t = None
     done = None
     err = None
@@ -394,6 +511,15 @@ def _list_devices_raw(
     hostapi: Optional[str],
     direction: str,
 ) -> Dict[str, Any]:
+    """Query the engine for a raw device listing.
+
+    Args:
+        hostapi (Optional[str]): Host API display name (e.g. "MME", "Windows WASAPI", "ASIO").
+        direction (str): "input" or "output".
+
+    Returns:
+        dict[str, Any]: Engine reply payload containing a `devices` list (when available).
+    """
     hostapi_eff = str(hostapi or getattr(default, "hostapi_name", "") or "MME")
     backend_eff, engine_hostapi, _disp = _hostapi_display_to_engine(hostapi_eff)
     proc = _ensure_engine_running()
@@ -419,6 +545,17 @@ def _merge_devices(
     hostapi_index: int,
     hostapi_name: str,
 ) -> List[Dict[str, Any]]:
+    """Merge separate input/output device listings into audiodevice-like device dicts.
+
+    Args:
+        devs_in (Iterable[dict[str, Any]]): Raw input-device items from engine.
+        devs_out (Iterable[dict[str, Any]]): Raw output-device items from engine.
+        hostapi_index (int): Host API index to stamp into merged device dicts.
+        hostapi_name (str): Host API display name (currently unused, kept for clarity).
+
+    Returns:
+        list[dict[str, Any]]: Merged device dictionaries (without global `index` assigned).
+    """
     order: List[str] = []
     by_name: Dict[str, Dict[str, Any]] = {}
 
@@ -469,12 +606,30 @@ def _merge_devices(
 
 
 def _is_port_open(host: str, port: int) -> bool:
+    """Check whether a TCP port is open.
+
+    Args:
+        host (str): Host/IP.
+        port (int): TCP port.
+
+    Returns:
+        bool: True if connect succeeds, else False.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.2)
         return s.connect_ex((host, port)) == 0
 
 
 def _ensure_engine_running() -> Optional[subprocess.Popen]:
+    """Start the engine process if needed (and if auto_start is enabled).
+
+    Returns:
+        Optional[subprocess.Popen]: The started process if this call spawned one; otherwise None.
+
+    Raises:
+        RuntimeError: If the engine fails to start and the port never opens.
+        FileNotFoundError: If the engine executable cannot be resolved.
+    """
     if not default.auto_start:
         return None
     if _is_port_open(default.host, default.port):
@@ -523,6 +678,11 @@ def _ensure_engine_running() -> Optional[subprocess.Popen]:
 
 
 def query_backends() -> Dict[str, Any]:
+    """List engine backends.
+
+    Returns:
+        dict[str, Any]: Engine reply payload.
+    """
     proc = _ensure_engine_running()
     c = AudioDeviceClient(default.host, default.port, timeout=default.timeout)
     try:
@@ -533,20 +693,29 @@ def query_backends() -> Dict[str, Any]:
 
 
 def query_hostapis_raw() -> Dict[str, Any]:
-    """Return engine-reported hostapi names (raw-ish).
+    """Return available host APIs (raw-ish) from the engine.
 
-    Kept as a lightweight helper; returns at least {"hostapis": [...]}.
-    Also includes {"by_backend": {"portaudio": [...], "cpal": [...]}} when available.
+    Returns:
+        dict[str, Any]: At least `{"hostapis": [...]}` and (when available)
+        `{"by_backend": {"portaudio": [...], "cpal": [...]}}`.
     """
     hostapis, by_backend = _hostapis_all()
     return {"hostapis": hostapis, "by_backend": by_backend}
 
 
 def query_hostapis(index=None):
-    """audiodevice-compatible query_hostapis(index=None).
+    """List host APIs (audiodevice-compatible).
 
-    - query_hostapis() -> tuple[dict, ...]
-    - query_hostapis(i) -> dict
+    Args:
+        index (Optional[int | str]): If None, return all host APIs. If int, return the host API
+            dict at that index. If str, match by host API name (case-insensitive).
+
+    Returns:
+        tuple[dict[str, Any], ...] | dict[str, Any]: A tuple of host API dicts, or a single dict.
+
+    Raises:
+        ValueError: If an int index is out of range, or a name is not found.
+        TypeError: If `index` is not int/str/None.
     """
     hostapis, _by_backend = _hostapis_all()
     # Build a global device list for stable indices.
@@ -611,7 +780,12 @@ def query_devices_raw(
 ) -> Dict[str, Any]:
     """Return the engine's raw device listing.
 
-    This is the pre-compat behavior (kept for backwards compatibility).
+    Args:
+        hostapi (Optional[str]): Host API display name (e.g. "MME", "Windows WASAPI", "ASIO").
+        direction (str): "input" or "output".
+
+    Returns:
+        dict[str, Any]: Engine reply payload (typically contains `devices`).
     """
     return _list_devices_raw(hostapi=hostapi, direction=direction)
 
@@ -620,11 +794,20 @@ def query_devices(
     device: Optional[Union[int, str]] = None,
     kind: Optional[str] = None,
 ) -> Union[DeviceList, Dict[str, Any]]:
-    """audiodevice-compatible query_devices().
+    """Query audio devices (audiodevice-compatible).
 
-    - query_devices() -> DeviceList (prints as a table)
-    - query_devices(index_or_name) -> device dict
-    - query_devices(kind="input"|"output") -> default device dict
+    Args:
+        device (Optional[int | str]): If None, return a `DeviceList`. If int, treat as a global
+            device index. If str, match by exact name first, then substring.
+        kind (Optional[str]): If provided, must be `"input"` or `"output"` and returns the
+            default device dict for that direction.
+
+    Returns:
+        DeviceList | dict[str, Any]: A printable list of devices, or a single device dict.
+
+    Raises:
+        ValueError: If an index is out of range, a name is empty/not found, or `kind` is invalid.
+        TypeError: If `device` has an unsupported type.
     """
     if device is None and kind is None:
         cached = _cache_get_devices()
@@ -653,7 +836,8 @@ def query_devices(
     for i, d in enumerate(devs):
         d["index"] = int(i)
 
-    # 确保 hostapi_names 覆盖所有设备上的 hostapi 索引，避免显示 Unknown（例如引擎返回的 hostapi 格式与 order 不一致时）
+    # Ensure hostapi_names covers all hostapi indices used by devices, so we avoid showing
+    # "Unknown" when the engine's hostapi indexing/order differs.
     # hostapi index 0 is valid; don't treat it as falsy.
     max_hi = (
         max((int(d.get("hostapi", -1)) if d.get("hostapi", -1) is not None else -1) for d in devs)
@@ -745,6 +929,11 @@ def query_devices(
 
 @dataclass
 class RecordingHandle:
+    """Handle for a non-blocking recording session.
+
+    Use `read()` to pull audio frames incrementally, `wait()` to read everything until EOF,
+    and `stop()` to stop the session and release resources.
+    """
     started_at: float
     duration_s: float
     channels: int
@@ -753,6 +942,7 @@ class RecordingHandle:
     _client: AudioDeviceClient
 
     def stop(self) -> None:
+        """Stop the recording session and close underlying resources."""
         try:
             self._client.request({"cmd": "session_stop"})
         finally:
@@ -764,6 +954,15 @@ class RecordingHandle:
                     pass
 
     def read(self, max_frames: int = 4096) -> Tuple[np.ndarray, bool]:
+        """Read up to `max_frames` frames from the engine capture buffer.
+
+        Args:
+            max_frames (int): Maximum number of frames to request from the engine.
+
+        Returns:
+            tuple[np.ndarray, bool]: `(audio, eof)` where `audio` is float32 shaped
+            `(frames, channels)` and `eof` indicates the engine ended the stream.
+        """
         data = self._client.request({"cmd": "capture_read", "max_frames": int(max_frames)})
         pcm16 = base64.b64decode(data["pcm16_b64"])
         frames = int(data["frames"])
@@ -776,6 +975,11 @@ class RecordingHandle:
         return x, eof
 
     def wait(self) -> np.ndarray:
+        """Read audio until EOF, then stop the session.
+
+        Returns:
+            np.ndarray: Concatenated float32 audio array with shape `(frames, channels)`.
+        """
         chunks = []
         while True:
             x, eof = self.read(4096)
@@ -803,6 +1007,28 @@ def rec_monitor(
     device_out: Optional[str] = None,
     rb_seconds: Optional[int] = None,
 ) -> Union[np.ndarray, RecordingHandle]:
+    """Record while monitoring (listen-through) for a fixed duration.
+
+    Args:
+        duration_s (float): Duration to record in seconds (> 0).
+        wav_path (str): Output WAV path when `save_wav=True`.
+        save_wav (bool): Whether to save a WAV file.
+        blocking (bool): If True, return the recorded audio array. If False, return a
+            `RecordingHandle` for incremental reads.
+        samplerate (Optional[int]): Target samplerate in Hz.
+        channels (Optional[int]): Input channel count to record.
+        hostapi (Optional[str]): Host API display name.
+        device_in (Optional[str]): Input device name (exact or partial match depends on engine).
+        device_out (Optional[str]): Output device name used for monitoring playback.
+        rb_seconds (Optional[int]): Ringbuffer size in seconds (larger reduces overrun risk).
+
+    Returns:
+        np.ndarray | RecordingHandle: Recorded audio when blocking; otherwise a handle.
+
+    Raises:
+        ValueError: If `duration_s<=0`, or `save_wav=True` with an empty `wav_path`.
+        RuntimeError: If the engine fails to start the monitor+record session.
+    """
     proc = _ensure_engine_running()
 
     dur = float(duration_s)
@@ -939,6 +1165,18 @@ def rec_monitor(
 
 
 def _write_wav_from_float32(path: str, y: np.ndarray, sr: int) -> None:
+    """Write a float32 audio array to a 16-bit PCM WAV file (atomic replace).
+
+    Args:
+        path (str): Destination path (will be replaced atomically).
+        y (np.ndarray): Audio array. Shape `(frames,)` or `(frames, channels)`. Values should
+            be in [-1.0, 1.0] (will be clipped).
+        sr (int): Samplerate in Hz.
+
+    Raises:
+        ValueError: If `y` is not 1D/2D, or `sr<=0`.
+        OSError: If writing or replacing the file fails.
+    """
     x = np.asarray(y, dtype=np.float32)
     if x.ndim == 1:
         x = x[:, None]
@@ -987,6 +1225,26 @@ def _rec_engine(
     device_in: Optional[str] = None,
     rb_seconds: Optional[int] = None,
 ) -> Union[np.ndarray, RecordingHandle]:
+    """Start an engine recording session.
+
+    Args:
+        frames (int | float): If int, number of frames to record. If float, duration seconds.
+        wav_path (str): WAV output path when `save_wav=True`.
+        save_wav (bool): Whether to write the recording to a WAV file.
+        blocking (bool): If True, return the recorded audio array; otherwise return a handle.
+        samplerate (Optional[int]): Samplerate in Hz.
+        channels (Optional[int]): Number of input channels.
+        hostapi (Optional[str]): Host API display name.
+        device_in (Optional[str]): Input device name.
+        rb_seconds (Optional[int]): Ringbuffer size in seconds.
+
+    Returns:
+        np.ndarray | RecordingHandle: Recorded audio (float32) if blocking; otherwise a handle.
+
+    Raises:
+        ValueError: If `save_wav=True` and `wav_path` is empty.
+        RuntimeError: If the engine fails to start the session.
+    """
     proc = _ensure_engine_running()
 
     fs = int(samplerate if samplerate is not None else (default.samplerate if default.samplerate is not None else _DEFAULT_SR_FALLBACK))
@@ -1059,6 +1317,20 @@ def _play_engine(
     rb_seconds: Optional[int] = None,
     chunk_frames: int = 4096,
 ) -> None:
+    """Play audio through the engine.
+
+    Args:
+        y (np.ndarray): Audio array (float32). Shape `(frames,)` or `(frames, channels)`.
+        blocking (bool): If True, wait until playback finishes.
+        samplerate (Optional[int]): Samplerate in Hz.
+        hostapi (Optional[str]): Host API display name.
+        device_out (Optional[str]): Output device name.
+        rb_seconds (Optional[int]): Engine ringbuffer size in seconds.
+        chunk_frames (int): Chunk size (frames) per network write.
+
+    Raises:
+        RuntimeError: If the engine rejects the session or I/O fails.
+    """
     proc = _ensure_engine_running()
     _ = proc
 
@@ -1137,6 +1409,28 @@ def _playrec_engine(
     rb_seconds: Optional[int] = None,
     chunk_frames: int = 4096,
 ) -> np.ndarray:
+    """Simultaneously play and record (duplex) using the engine.
+
+    Args:
+        y (np.ndarray): Output audio array (float32). Shape `(frames,)` or `(frames, out_ch)`.
+        wav_path (str): WAV output path when `save_wav=True`.
+        save_wav (bool): Whether to save the recorded input to a WAV file.
+        blocking (bool): If True, run in a blocking mode and return recorded audio.
+        samplerate (Optional[int]): Samplerate in Hz.
+        in_channels (Optional[int]): Input channels to record.
+        hostapi (Optional[str]): Host API display name.
+        device_in (Optional[str]): Input device name.
+        device_out (Optional[str]): Output device name.
+        rb_seconds (Optional[int]): Engine ringbuffer size in seconds.
+        chunk_frames (int): Chunk size (frames) per network write.
+
+    Returns:
+        np.ndarray: Recorded input audio as float32 with shape `(frames, in_channels)`.
+
+    Raises:
+        ValueError: If `save_wav=True` with an empty `wav_path`.
+        RuntimeError: If the engine session cannot be started.
+    """
     proc = _ensure_engine_running()
     _ = proc
 
@@ -1252,6 +1546,17 @@ def _playrec_engine(
 
 
 def _hostapi_name_from_any(value) -> str:
+    """Normalize a host API selector to a display name.
+
+    Args:
+        value (Any): None, int hostapi index, or str hostapi name.
+
+    Returns:
+        str: Host API display name (empty string if value is None).
+
+    Raises:
+        TypeError: If `value` is not int/str/None.
+    """
     if value is None:
         return ""
     if isinstance(value, int):
@@ -1262,6 +1567,15 @@ def _hostapi_name_from_any(value) -> str:
 
 
 def _device_index_from_any(value, which: str) -> Optional[int]:
+    """Extract a device index from an audiodevice-style `device` argument.
+
+    Args:
+        value (Any): None, an int device index, or a 2-tuple/list `(in_idx, out_idx)`.
+        which (str): "input" or "output".
+
+    Returns:
+        Optional[int]: The selected index, or None if not provided/derivable.
+    """
     if value is None:
         return None
     if isinstance(value, int):
@@ -1273,13 +1587,42 @@ def _device_index_from_any(value, which: str) -> Optional[int]:
 
 
 def _device_name_from_index(idx: int) -> Tuple[str, str]:
+    """Resolve `(hostapi_name, device_name)` from a global device index.
+
+    Args:
+        idx (int): Global device index as returned by `query_devices()`.
+
+    Returns:
+        tuple[str, str]: `(hostapi_name, device_name)`.
+    """
     d = query_devices(int(idx))
     hostapi_name = str(query_hostapis(int(d.get("hostapi", -1))).get("name", ""))
     return hostapi_name, str(d.get("name", ""))
 
 
 def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwargs) -> None:
-    """audiodevice-compatible play()."""
+    """Play audio data (audiodevice-compatible).
+
+    Args:
+        data (Any): Audio array-like. Interpreted as float32 with shape `(frames,)` or
+            `(frames, channels)`.
+        samplerate (Optional[float]): Samplerate in Hz. Falls back to `default.samplerate`.
+        mapping (Optional[Sequence[int]]): 1-based channel mapping to select/reorder output
+            channels from `data` columns.
+        blocking (bool): If True, wait until playback ends. If False, starts a background
+            thread; use `wait()` to join and surface errors.
+        loop (bool): Not supported (kept for compatibility).
+        **kwargs: Compatibility extras:
+            - hostapi (int|str|None): Host API selector.
+            - device (int|tuple[int,int]|None): Device index or `(in_idx, out_idx)`.
+            - rb_seconds (int|None): Engine ringbuffer size in seconds.
+            - chunk_frames (int): Chunk size (frames) per write.
+
+    Raises:
+        NotImplementedError: If `loop=True`.
+        ValueError: If `mapping` is invalid.
+        RuntimeError: If playback fails in the engine.
+    """
     if mapping is not None:
         # Minimal mapping: reorder/select output channels from data columns (1-based like audiodevice).
         m = list(mapping) if isinstance(mapping, (list, tuple)) else None
@@ -1367,7 +1710,32 @@ def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwar
 
 
 def rec(frames=None, samplerate=None, channels=None, dtype=None, out=None, mapping=None, blocking=False, **kwargs):
-    """audiodevice-compatible rec()."""
+    """Record audio (audiodevice-compatible).
+
+    Args:
+        frames (Optional[int]): Number of frames to record. If None, inferred from `out`.
+        samplerate (Optional[float]): Samplerate in Hz. Falls back to `default.samplerate`.
+        channels (Optional[int]): Number of input channels to record.
+        dtype (Optional[Any]): Output dtype. Defaults to `out.dtype` or float32.
+        out (Optional[np.ndarray]): Pre-allocated output array with shape `(frames, channels)`.
+        mapping (Optional[Sequence[int]]): 1-based input channel mapping. When provided,
+            `channels=len(mapping)`.
+        blocking (bool): If True, record synchronously. If False, return immediately and
+            fill `out`/returned array in a background thread (errors are suppressed to mimic
+            audiodevice behavior).
+        **kwargs: Compatibility extras:
+            - hostapi (int|str|None): Host API selector.
+            - device (int|tuple[int,int]|None): Device index or `(in_idx, out_idx)`.
+            - wav_path (str): WAV output path when `save_wav=True`.
+            - save_wav (bool): Whether to save to WAV.
+            - rb_seconds (int|None): Engine ringbuffer size in seconds.
+
+    Returns:
+        np.ndarray: The recorded audio array (same object as `out` when provided).
+
+    Raises:
+        ValueError: If parameters are inconsistent (e.g. `frames` missing with `out=None`).
+    """
     if mapping is not None:
         # Minimal mapping: record specific input channels into output columns (1-based).
         m = list(mapping) if isinstance(mapping, (list, tuple)) else None
@@ -1389,7 +1757,7 @@ def rec(frames=None, samplerate=None, channels=None, dtype=None, out=None, mappi
     wav_path = str(kwargs.pop("wav_path", "") or "")
     save_wav = bool(kwargs.pop("save_wav", False))
     rb_seconds = kwargs.pop("rb_seconds", None)
-    
+
     if save_wav and not wav_path:
         raise ValueError("save_wav=True requires wav_path")
 
@@ -1479,7 +1847,30 @@ def playrec(
     blocking=False,
     **kwargs,
 ):
-    """audiodevice-compatible playrec()."""
+    """Simultaneously play and record (audiodevice-compatible).
+
+    Args:
+        data (Any): Output audio array-like, converted to float32.
+        samplerate (Optional[float]): Samplerate in Hz.
+        channels (Optional[int]): Input channels to record (defaults to `default.channels[0]`).
+        dtype (Optional[Any]): Output dtype for recorded audio.
+        out (Optional[np.ndarray]): Optional pre-allocated output array for recorded audio.
+        input_mapping (Optional[Sequence[int]]): 1-based input channel mapping.
+        output_mapping (Optional[Sequence[int]]): 1-based output channel mapping applied to
+            the `data` columns.
+        blocking (bool): If True, run synchronously; if False, run in a background thread and
+            return immediately (errors are suppressed).
+        **kwargs: Compatibility extras:
+            - hostapi (int|str|None): Host API selector.
+            - device (int|tuple[int,int]|None): Device index or `(in_idx, out_idx)`.
+            - wav_path (str): WAV output path when `save_wav=True`.
+            - save_wav (bool): Whether to save recorded input to WAV.
+            - rb_seconds (int|None): Engine ringbuffer size in seconds.
+            - chunk_frames (int): Chunk size (frames) per write.
+
+    Returns:
+        np.ndarray: Recorded audio array (same object as `out` when provided).
+    """
     if input_mapping is not None:
         m = list(input_mapping) if isinstance(input_mapping, (list, tuple)) else None
         if not m:
@@ -1603,6 +1994,12 @@ def playrec(
 
 
 def _wait_session_end(client: AudioDeviceClient, timeout_s: float) -> None:
+    """Poll engine status until the current session ends or timeout elapses.
+
+    Args:
+        client (AudioDeviceClient): Connected client instance.
+        timeout_s (float): Timeout in seconds.
+    """
     deadline = time.time() + float(timeout_s)
     while time.time() < deadline:
         try:
@@ -1615,7 +2012,11 @@ def _wait_session_end(client: AudioDeviceClient, timeout_s: float) -> None:
 
 
 class CallbackFlags:
-    # Minimal placeholder compatible with common usage patterns.
+    """Minimal placeholder compatible with common callback usage patterns.
+
+    Attributes are best-effort booleans and may not reflect real driver state in this MVP
+    implementation.
+    """
     input_underflow = False
     input_overflow = False
     output_underflow = False
@@ -1624,14 +2025,20 @@ class CallbackFlags:
 
 
 class CallbackStop(Exception):
+    """Raise from a stream callback to stop the stream gracefully."""
     pass
 
 
 class CallbackAbort(Exception):
+    """Raise from a stream callback to abort the stream."""
     pass
 
 
 class _StreamBase:
+    """Base class for callback-driven streaming APIs.
+
+    This is a small subset modeled after `sounddevice.Stream` behavior.
+    """
     def __init__(
         self,
         *,
@@ -1645,6 +2052,21 @@ class _StreamBase:
         callback=None,
         hostapi=None,
     ) -> None:
+        """Create a stream object (not started yet).
+
+        Args:
+            kind (str): "input", "output", or "duplex".
+            samplerate (Optional[float]): Samplerate in Hz.
+            blocksize (int): Frames per callback block (0 uses a default).
+            dtype (Any): Kept for compatibility (engine uses float32 internally).
+            latency (Any): Kept for compatibility (best-effort).
+            channels (Any): For duplex, can be int or `(in_ch, out_ch)`. For input/output,
+                can be an int.
+            device (Any): Device selector (int, `(in_idx, out_idx)`, or str device name).
+            callback (Callable): Required callback with signature
+                `(indata, outdata, frames, time_info, status)`.
+            hostapi (Any): Host API selector (int or str).
+        """
         self.kind = str(kind)
         self.samplerate = float(samplerate) if samplerate is not None else (
             default.samplerate if default.samplerate is not None else _DEFAULT_SR_FALLBACK
@@ -1678,6 +2100,15 @@ class _StreamBase:
         return (not self._active) and (not self._closed)
 
     def start(self):
+        """Start the stream worker thread.
+
+        Returns:
+            _StreamBase: Self.
+
+        Raises:
+            RuntimeError: If the stream is closed.
+            ValueError: If `callback` is not provided.
+        """
         if self._closed:
             raise RuntimeError("Stream is closed")
         if self._active:
@@ -1705,6 +2136,14 @@ class _StreamBase:
         return self
 
     def stop(self):
+        """Stop the stream worker thread (best-effort).
+
+        Returns:
+            _StreamBase: Self.
+
+        Raises:
+            RuntimeError: If the worker failed or did not finish in time.
+        """
         if self._closed:
             return
         self._stop.set()
@@ -1735,6 +2174,11 @@ class _StreamBase:
         return self
 
     def close(self):
+        """Stop (if needed) and mark the stream as closed.
+
+        Returns:
+            _StreamBase: Self.
+        """
         if self._closed:
             return
         try:
@@ -1744,14 +2188,21 @@ class _StreamBase:
         return self
 
     def __enter__(self):
+        """Context-manager enter: start the stream."""
         self.start()
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        """Context-manager exit: close the stream."""
         self.close()
         return False
 
     def _resolve_hostapi_and_devices_for_stream(self) -> Tuple[str, str, str]:
+        """Resolve effective hostapi/device names for stream startup.
+
+        Returns:
+            tuple[str, str, str]: `(hostapi_name, device_in_name, device_out_name)`.
+        """
         hostapi_name = _hostapi_name_from_any(self.hostapi) if self.hostapi is not None else ""
         if not hostapi_name:
             hostapi_name = str(getattr(default, "hostapi_name", "") or "MME")
@@ -1776,6 +2227,11 @@ class _StreamBase:
         return hostapi_name, dev_in, dev_out
 
     def _run(self) -> None:
+        """Worker loop: start an engine session and drive the callback per block.
+
+        Raises:
+            RuntimeError: If engine session fails or I/O fails.
+        """
         # MVP implementation: use engine playrec mode and call callback per block.
         hostapi_name, dev_in, dev_out = self._resolve_hostapi_and_devices_for_stream()
         backend_eff, engine_hostapi, _disp = _hostapi_display_to_engine(hostapi_name)
@@ -1922,27 +2378,50 @@ class _StreamBase:
 
 
 class Stream(_StreamBase):
+    """Duplex (input+output) callback stream."""
     def __init__(self, *args, **kwargs) -> None:
+        """Create a duplex stream.
+
+        Args:
+            *args: Forwarded to `_StreamBase`.
+            **kwargs: Forwarded to `_StreamBase` (notably `callback`, `samplerate`, `channels`).
+        """
         super().__init__(kind="duplex", *args, **kwargs)
 
 
 class InputStream(_StreamBase):
+    """Input-only callback stream."""
     def __init__(self, *args, **kwargs) -> None:
+        """Create an input stream.
+
+        Args:
+            *args: Forwarded to `_StreamBase`.
+            **kwargs: Forwarded to `_StreamBase` (notably `callback`, `samplerate`, `channels`).
+        """
         super().__init__(kind="input", *args, **kwargs)
 
 
 class OutputStream(_StreamBase):
+    """Output-only callback stream."""
     def __init__(self, *args, **kwargs) -> None:
+        """Create an output stream.
+
+        Args:
+            *args: Forwarded to `_StreamBase`.
+            **kwargs: Forwarded to `_StreamBase` (notably `callback`, `samplerate`, `channels`).
+        """
         super().__init__(kind="output", *args, **kwargs)
 
 
 @dataclass
 class LongRecordingHandle:
+    """Handle for a long-running disk recording session."""
     path: str
     _proc: Optional[subprocess.Popen]
     _client: AudioDeviceClient
 
     def stop(self) -> None:
+        """Stop the long recording session and release resources."""
         try:
             self._client.request({"cmd": "session_stop"})
         finally:
@@ -1954,6 +2433,7 @@ class LongRecordingHandle:
                     pass
 
     def wait(self) -> str:
+        """Return the output path (kept for compatibility)."""
         return self.path
 
 
@@ -1967,6 +2447,21 @@ def rec_long(
     device_in: Optional[str] = None,
     rb_seconds: Optional[int] = None,
 ) -> LongRecordingHandle:
+    """Record continuously to disk and rotate files periodically.
+
+    Args:
+        path (str): Base output WAV path.
+        rotate_s (float): Rotate interval in seconds (each segment is written as a separate file
+            by the engine).
+        samplerate (Optional[int]): Samplerate in Hz.
+        channels (Optional[int]): Input channel count.
+        hostapi (Optional[str]): Host API display name.
+        device_in (Optional[str]): Input device name.
+        rb_seconds (Optional[int]): Engine ringbuffer size in seconds.
+
+    Returns:
+        LongRecordingHandle: A handle that can be stopped with `stop()`.
+    """
     proc = _ensure_engine_running()
 
     fs = int(samplerate if samplerate is not None else (default.samplerate if default.samplerate is not None else _DEFAULT_SR_FALLBACK))

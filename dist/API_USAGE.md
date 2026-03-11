@@ -148,3 +148,94 @@ x = ad.rec_monitor(10.0, blocking=True, save_wav=True, wav_path="rec_monitor.wav
 - **第一次调用很慢**：正常（启动引擎 + 枚举设备），之后会快很多。
 - **ASIO 下全双工（playrec/monitor）兼容性**：不同驱动差异很大；遇到问题可优先改用 `Windows WASAPI`。
 
+## 9) 流式接口（Stream / InputStream / OutputStream）
+
+当你需要**边录边处理**、**边生成边播放**、或以 callback 方式持续推送/拉取音频时，用 Streaming API：
+
+- `ad.InputStream(...)`：只输入（采集），callback 每个 block 给你 `indata`
+- `ad.OutputStream(...)`：只输出（播放），callback 每个 block 让你填 `outdata`
+- `ad.Stream(...)`：全双工（输入+输出），callback 同时拿到 `indata` 和 `outdata`
+
+Streaming API 采用和 `sounddevice` 类似的 callback 签名：
+
+```python
+def callback(indata, outdata, frames, time, status):
+    ...
+```
+
+- `indata` / `outdata`：`float32` 的 `ndarray`，shape 为 `(frames, channels)`
+- `frames`：本次 block 的帧数（通常等于 `blocksize`）
+- `time`：一个 dict（包含 `currentTime` 等字段）
+- `status`：`CallbackFlags`（占位对象，字段如 `input_overflow` 等）
+
+### 9.1 InputStream：流式采集（示例）
+
+```python
+import time
+import numpy as np
+import audiodevice as ad
+
+ad.init()
+ad.default.hostapi = "Windows WASAPI"
+
+chunks = []
+
+def cb(indata, outdata, frames, time_info, status):
+    chunks.append(indata.copy())
+
+with ad.InputStream(samplerate=48000, channels=1, blocksize=1024, callback=cb):
+    time.sleep(3.0)  # 采集 3 秒
+
+y = np.concatenate(chunks, axis=0) if chunks else np.zeros((0, 1), np.float32)
+print(y.shape, y.dtype)
+```
+
+### 9.2 OutputStream：流式播放（示例）
+
+```python
+import time
+import numpy as np
+import audiodevice as ad
+
+ad.init()
+fs = 48000
+phase = 0.0
+
+def cb(indata, outdata, frames, time_info, status):
+    global phase
+    t = (np.arange(frames, dtype=np.float32) + phase) / fs
+    outdata[:, 0] = 0.1 * np.sin(2 * np.pi * 440.0 * t)
+    phase += frames
+
+with ad.OutputStream(samplerate=fs, channels=1, blocksize=1024, callback=cb):
+    time.sleep(2.0)
+```
+
+### 9.3 Stream（全双工）：边录边播（示例）
+
+```python
+import time
+import audiodevice as ad
+
+ad.init()
+
+def cb(indata, outdata, frames, time_info, status):
+    if outdata.size and indata.size:
+        outdata[:] = indata
+
+with ad.Stream(samplerate=48000, channels=(1, 1), blocksize=256, callback=cb):
+    time.sleep(5.0)
+```
+
+### 9.4 如何停止、如何拿到当前 stream
+
+- 手动停止：调用 `stream.stop()` / `stream.close()`，或 `ad.stop()`（best-effort）
+- 获取当前活跃 stream：`ad.get_stream()`
+- 非阻塞操作（如 `ad.play(..., blocking=False)`）的等待：`ad.wait()`
+
+### 9.5 重要注意事项
+
+- **callback 必须快**：避免做耗时 I/O（写盘/网络）、避免大对象频繁分配；建议把数据放进队列，后台线程处理。
+- **ASIO 兼容性**：某些 ASIO 驱动在 streaming / 全双工下更容易失败；优先尝试 `Windows WASAPI` 或 `MME`。
+- **blocksize**：越小延迟越低，但 CPU 压力越大；建议从 `256/512/1024` 试起。
+
