@@ -14,14 +14,13 @@ def main() -> None:
         ad.default.engine_exe = ENGINE_EXE
         ad.default.engine_cwd = os.path.dirname(ENGINE_EXE)
 
-    ad.default.hostapi = "ASIO"
+    ad.default.hostapi = "WASAPI"
     ad.default.samplerate = 48_000
-    ad.default.channels = 2
-    # ad.default.device_in = "ASIO4ALL"
-    ad.default.device_in = "UMC ASIO Driver"
+    ad.default.device = [10,12]
+    ad.default.channels = [6,2]
 
-    wav_path = os.path.join(os.path.dirname(__file__), "rec999.wav")
-    y = ad.rec(48_000 * 5, wav_path=wav_path, save_wav=True, blocking=True)
+    wav_path = os.path.join(os.path.dirname(__file__), "rec7.wav")
+    y = ad.rec(10, wav_path=wav_path, save_wav=True, blocking=True)
     print("recorded:", y.shape, y.dtype, "min/max:", float(y.min()), float(y.max()))
 
 

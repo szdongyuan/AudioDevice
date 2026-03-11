@@ -1010,17 +1010,25 @@ def rec_monitor(
     """Record while monitoring (listen-through) for a fixed duration.
 
     Args:
-        duration_s (float): Duration to record in seconds (> 0).
-        wav_path (str): Output WAV path when `save_wav=True`.
-        save_wav (bool): Whether to save a WAV file.
-        blocking (bool): If True, return the recorded audio array. If False, return a
-            `RecordingHandle` for incremental reads.
-        samplerate (Optional[int]): Target samplerate in Hz.
-        channels (Optional[int]): Input channel count to record.
-        hostapi (Optional[str]): Host API display name.
-        device_in (Optional[str]): Input device name (exact or partial match depends on engine).
-        device_out (Optional[str]): Output device name used for monitoring playback.
-        rb_seconds (Optional[int]): Ringbuffer size in seconds (larger reduces overrun risk).
+        duration_s: Recording duration in seconds; must be > 0.
+            Format: float, e.g. 5.0.
+        wav_path: Output WAV path when save_wav=True; must be non-empty then.
+            Format: str, local file path.
+        save_wav: Whether to also save a WAV file.
+        blocking: If True, return the recorded array. If False, return a RecordingHandle for
+            incremental reads.
+        samplerate: Target sample rate in Hz. Uses default.samplerate if None.
+            Format: int or None, e.g. 44100.
+        channels: Number of input channels to record. Uses default.channels[0] or 1 if None.
+            Format: int or None.
+        hostapi: Host API display name, e.g. "MME", "Windows WASAPI".
+            Format: str or None.
+        device_in: Input device name (exact or partial match depends on engine).
+            Format: str or None.
+        device_out: Output device name used for monitoring playback.
+            Format: str or None.
+        rb_seconds: Ring buffer size in seconds; larger reduces overrun risk.
+            Format: int or None.
 
     Returns:
         np.ndarray | RecordingHandle: Recorded audio when blocking; otherwise a handle.
@@ -1604,19 +1612,20 @@ def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwar
     """Play audio data (audiodevice-compatible).
 
     Args:
-        data (Any): Audio array-like. Interpreted as float32 with shape `(frames,)` or
-            `(frames, channels)`.
-        samplerate (Optional[float]): Samplerate in Hz. Falls back to `default.samplerate`.
-        mapping (Optional[Sequence[int]]): 1-based channel mapping to select/reorder output
-            channels from `data` columns.
-        blocking (bool): If True, wait until playback ends. If False, starts a background
-            thread; use `wait()` to join and surface errors.
-        loop (bool): Not supported (kept for compatibility).
-        **kwargs: Compatibility extras:
-            - hostapi (int|str|None): Host API selector.
-            - device (int|tuple[int,int]|None): Device index or `(in_idx, out_idx)`.
-            - rb_seconds (int|None): Engine ringbuffer size in seconds.
-            - chunk_frames (int): Chunk size (frames) per write.
+        data: Audio to play. Format: array-like, shape (frames,) or (frames, channels);
+            converted to float32 internally; each column is one channel.
+        samplerate: Sample rate in Hz. Uses default.samplerate if None.
+            Format: int or float, e.g. 44100, 48000.
+        mapping: 1-based channel mapping to select/reorder output channels from data columns.
+            Format: non-empty sequence of 1-based channel indices, e.g. [1, 2] or [2, 1].
+        blocking: If True, block until playback finishes. If False, start playback in a
+            background thread and return immediately.
+        loop: Whether to loop (not supported; kept for API compatibility).
+        **kwargs: Optional compatibility args:
+            - hostapi (int|str|None): Host API selector, e.g. "MME", "Windows WASAPI".
+            - device (int|tuple[int,int]|None): Device index or (input_index, output_index).
+            - rb_seconds (int|None): Engine ring buffer size in seconds.
+            - chunk_frames (int): Frames per write; default 4096.
 
     Raises:
         NotImplementedError: If `loop=True`.
@@ -1713,25 +1722,29 @@ def rec(frames=None, samplerate=None, channels=None, dtype=None, out=None, mappi
     """Record audio (audiodevice-compatible).
 
     Args:
-        frames (Optional[int]): Number of frames to record. If None, inferred from `out`.
-        samplerate (Optional[float]): Samplerate in Hz. Falls back to `default.samplerate`.
-        channels (Optional[int]): Number of input channels to record.
-        dtype (Optional[Any]): Output dtype. Defaults to `out.dtype` or float32.
-        out (Optional[np.ndarray]): Pre-allocated output array with shape `(frames, channels)`.
-        mapping (Optional[Sequence[int]]): 1-based input channel mapping. When provided,
-            `channels=len(mapping)`.
-        blocking (bool): If True, record synchronously. If False, return immediately and
-            fill `out`/returned array in a background thread (errors are suppressed to mimic
-            audiodevice behavior).
-        **kwargs: Compatibility extras:
+        frames: Number of frames to record (one sample per channel per frame). Inferred from
+            out.shape[0] if None. Format: non-negative int; can be omitted if out is given.
+        samplerate: Sample rate in Hz. Uses default.samplerate if None.
+            Format: int or float, e.g. 44100.
+        channels: Number of input channels to record. Inferred from out or default.channels[0].
+            Format: positive int, e.g. 1, 2.
+        dtype: Output array dtype; default float32 or out.dtype.
+            Format: numpy dtype, e.g. np.float32, np.int16.
+        out: Pre-allocated array for recording; shape must be (frames, channels).
+            Format: np.ndarray shape (frames, channels); if provided, frames can be omitted.
+        mapping: 1-based input channel mapping; when given, channels=len(mapping).
+            Format: non-empty sequence of 1-based channel indices, e.g. [1, 2].
+        blocking: If True, record synchronously and return. If False, return immediately and
+            fill out in a background thread (errors not raised).
+        **kwargs: Optional compatibility args:
             - hostapi (int|str|None): Host API selector.
-            - device (int|tuple[int,int]|None): Device index or `(in_idx, out_idx)`.
-            - wav_path (str): WAV output path when `save_wav=True`.
-            - save_wav (bool): Whether to save to WAV.
-            - rb_seconds (int|None): Engine ringbuffer size in seconds.
+            - device (int|tuple[int,int]|None): Device index or (in_idx, out_idx).
+            - wav_path (str): WAV file path when save_wav=True (required then).
+            - save_wav (bool): Whether to also write a WAV file.
+            - rb_seconds (int|None): Engine ring buffer size in seconds.
 
     Returns:
-        np.ndarray: The recorded audio array (same object as `out` when provided).
+        np.ndarray: Recorded audio (same object as out when out is provided).
 
     Raises:
         ValueError: If parameters are inconsistent (e.g. `frames` missing with `out=None`).
@@ -1850,26 +1863,32 @@ def playrec(
     """Simultaneously play and record (audiodevice-compatible).
 
     Args:
-        data (Any): Output audio array-like, converted to float32.
-        samplerate (Optional[float]): Samplerate in Hz.
-        channels (Optional[int]): Input channels to record (defaults to `default.channels[0]`).
-        dtype (Optional[Any]): Output dtype for recorded audio.
-        out (Optional[np.ndarray]): Optional pre-allocated output array for recorded audio.
-        input_mapping (Optional[Sequence[int]]): 1-based input channel mapping.
-        output_mapping (Optional[Sequence[int]]): 1-based output channel mapping applied to
-            the `data` columns.
-        blocking (bool): If True, run synchronously; if False, run in a background thread and
-            return immediately (errors are suppressed).
-        **kwargs: Compatibility extras:
+        data: Audio to play while recording from the input device.
+            Format: array-like, shape (frames,) or (frames, channels); converted to float32.
+        samplerate: Sample rate in Hz. Uses default.samplerate if None.
+            Format: int or float, e.g. 44100.
+        channels: Number of input channels to record; default default.channels[0] or 1.
+            Format: positive int.
+        dtype: Dtype for the recorded output array; default float32 or out.dtype.
+            Format: numpy dtype.
+        out: Pre-allocated array for recorded audio; shape (frames, channels), frames = data rows.
+            Format: np.ndarray or None.
+        input_mapping: 1-based input channel mapping; when given, channels=len(input_mapping).
+            Format: non-empty sequence, e.g. [1, 2].
+        output_mapping: 1-based output channel mapping applied to data columns.
+            Format: non-empty sequence, e.g. [1, 2] or [2, 1].
+        blocking: If True, run synchronously and return recorded array. If False, run in background
+            and return immediately.
+        **kwargs: Optional compatibility args:
             - hostapi (int|str|None): Host API selector.
-            - device (int|tuple[int,int]|None): Device index or `(in_idx, out_idx)`.
-            - wav_path (str): WAV output path when `save_wav=True`.
-            - save_wav (bool): Whether to save recorded input to WAV.
-            - rb_seconds (int|None): Engine ringbuffer size in seconds.
-            - chunk_frames (int): Chunk size (frames) per write.
+            - device (int|tuple[int,int]|None): Device index or (in_idx, out_idx).
+            - wav_path (str): WAV path for recorded audio when save_wav=True (required then).
+            - save_wav (bool): Whether to save recorded audio to WAV.
+            - rb_seconds (int|None): Engine ring buffer size in seconds.
+            - chunk_frames (int): Frames per write.
 
     Returns:
-        np.ndarray: Recorded audio array (same object as `out` when provided).
+        np.ndarray: Recorded audio (same object as out when out is provided).
     """
     if input_mapping is not None:
         m = list(input_mapping) if isinstance(input_mapping, (list, tuple)) else None
@@ -2055,17 +2074,24 @@ class _StreamBase:
         """Create a stream object (not started yet).
 
         Args:
-            kind (str): "input", "output", or "duplex".
-            samplerate (Optional[float]): Samplerate in Hz.
-            blocksize (int): Frames per callback block (0 uses a default).
-            dtype (Any): Kept for compatibility (engine uses float32 internally).
-            latency (Any): Kept for compatibility (best-effort).
-            channels (Any): For duplex, can be int or `(in_ch, out_ch)`. For input/output,
-                can be an int.
-            device (Any): Device selector (int, `(in_idx, out_idx)`, or str device name).
-            callback (Callable): Required callback with signature
-                `(indata, outdata, frames, time_info, status)`.
-            hostapi (Any): Host API selector (int or str).
+            kind: Stream type: "input" (capture only), "output" (playback only), "duplex" (both).
+                Format: str, one of "input" | "output" | "duplex".
+            samplerate: Sample rate in Hz. Uses default.samplerate if None.
+                Format: float or None, e.g. 44100.0.
+            blocksize: Frames per callback; 0 uses default (e.g. 1024).
+                Format: int.
+            dtype: Kept for compatibility; engine uses float32 internally.
+            latency: Kept for compatibility; low-latency hint (best-effort).
+            channels: Channel count. For duplex: int or (in_ch, out_ch). For input/output: int.
+                Format: int or (int, int), e.g. 2 or (1, 2).
+            device: Device selector: index, (input_index, output_index), or device name string.
+                Format: int | tuple[int,int] | str | None.
+            callback: Callback with signature (indata, outdata, frames, time_info, status).
+                Format: indata (frames, in_ch) float32; outdata (frames, out_ch) float32, write in
+                callback; frames int; time_info dict; status CallbackFlags. Raise CallbackStop or
+                CallbackAbort to end the stream.
+            hostapi: Host API selector.
+                Format: int or str or None, e.g. "MME", "ASIO".
         """
         self.kind = str(kind)
         self.samplerate = float(samplerate) if samplerate is not None else (
@@ -2450,17 +2476,23 @@ def rec_long(
     """Record continuously to disk and rotate files periodically.
 
     Args:
-        path (str): Base output WAV path.
-        rotate_s (float): Rotate interval in seconds (each segment is written as a separate file
-            by the engine).
-        samplerate (Optional[int]): Samplerate in Hz.
-        channels (Optional[int]): Input channel count.
-        hostapi (Optional[str]): Host API display name.
-        device_in (Optional[str]): Input device name.
-        rb_seconds (Optional[int]): Engine ringbuffer size in seconds.
+        path: Base path for output WAV files; engine writes one file per rotate_s interval.
+            Format: str, local file path (naming/placeholders depend on engine).
+        rotate_s: Rotation interval in seconds; each segment is a separate file. Default 300.
+            Format: float, e.g. 60.0, 300.0.
+        samplerate: Sample rate in Hz. Uses default.samplerate if None.
+            Format: int or None.
+        channels: Number of input channels. Uses default.channels[0] or 1 if None.
+            Format: int or None.
+        hostapi: Host API display name.
+            Format: str or None.
+        device_in: Input device name.
+            Format: str or None.
+        rb_seconds: Engine ring buffer size in seconds.
+            Format: int or None.
 
     Returns:
-        LongRecordingHandle: A handle that can be stopped with `stop()`.
+        LongRecordingHandle: Handle; call stop() to stop recording.
     """
     proc = _ensure_engine_running()
 
