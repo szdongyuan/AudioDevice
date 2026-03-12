@@ -6,8 +6,9 @@ This guide is for end users who received the prebuilt packages (no source checko
 
 - **OS**: Windows 10/11 (x64)
 - **Python**: Already installed (Python 3.10+ recommended)
-- **Two files** (usually provided to you):
-  - `audiodevice-<version>-py3-none-any.whl` (Python SDK wheel)
+- **Recommended**: one file
+  - `audiodevice-<version>-py3-none-any.whl` (Python SDK wheel, usually **bundles the engine**)
+- **Optional** (only if your wheel does **not** bundle the engine):
   - `audiodevice_engine_win64_<timestamp>.zip` (engine ZIP: `audiodevice.exe` + optional `portaudio.dll` + docs)
 
 ## 1) Install the Python SDK (wheel)
@@ -16,11 +17,25 @@ This guide is for end users who received the prebuilt packages (no source checko
 python -m pip install C:\path\to\audiodevice-<version>-py3-none-any.whl
 ```
 
-## 2) Configure the engine (recommended: point to the ZIP)
+## 2) Engine setup (usually NOT needed)
+
+If your wheel bundles the engine, you can skip this step and go to the quick test.
+
+### How to tell if the wheel bundles the engine
+
+After installing the wheel, run:
+
+```powershell
+python -c "import audiodevice as ad; import os; from importlib import resources as r; p=r.files('audiodevice').joinpath('bin','audiodevice.exe'); print('bundled_exe=', os.fspath(p), 'exists=', p.is_file())"
+```
+
+If `exists=True`, the engine is already included and no ZIP / PATH setup is required.
+
+### If the wheel does NOT bundle the engine
 
 Pick one option below (**Option A is recommended**).
 
-### Option A (recommended): point to the ZIP (auto-install to cache)
+#### Option A (recommended): point to the ZIP (auto-install to cache)
 
 1) Put the ZIP in a stable location:
 
@@ -45,11 +60,11 @@ The engine will be installed to the cache directory (default):
 
 - `%LOCALAPPDATA%\audiodevice\engine\`
 
-### Option B: put `audiodevice.exe` on PATH
+#### Option B: put `audiodevice.exe` on PATH
 
 Extract the ZIP, then add the folder containing `audiodevice.exe` to your PATH.
 
-### Option C: set the engine path in your code
+#### Option C: set the engine path in your code
 
 Call `ad.init()` with the engine path:
 
@@ -72,7 +87,7 @@ If you see a backend list and a device list, installation is OK.
 ## Troubleshooting
 
 - **Engine not found / cannot start**:
-  - Use Option A (`AUDIODEVICE_ENGINE_URL`) first
+  - If your wheel does not bundle the engine, use Option A (`AUDIODEVICE_ENGINE_URL`) first
   - Or make sure `audiodevice.exe` is on PATH
 - **First run is slow**: expected (engine start + device enumeration). Next calls are faster.
 - **Windows Firewall prompt**: allow local loopback (127.0.0.1) communication for `audiodevice.exe`.

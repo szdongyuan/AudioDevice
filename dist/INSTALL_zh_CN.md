@@ -6,8 +6,9 @@
 
 - **系统**：Windows 10/11（x64）
 - **Python**：已安装 Python 3.10+（能运行 `python` 和 `pip`）
-- **两份文件**（通常由提供方给你）：
-  - `audiodevice-<version>-py3-none-any.whl`（Python SDK 安装包）
+- **推荐**：只需要 1 个文件
+  - `audiodevice-<version>-py3-none-any.whl`（Python SDK 安装包，通常**已内置引擎 exe/dll**）
+- **可选**（仅当你的 whl **不包含引擎**时才需要）：
   - `audiodevice_engine_win64_<timestamp>.zip`（引擎包：`audiodevice.exe` + 可选 `portaudio.dll` + 文档）
 
 ## 第 1 步：安装 Python SDK（whl）
@@ -16,11 +17,25 @@
 python -m pip install C:\路径\audiodevice-<version>-py3-none-any.whl
 ```
 
-## 第 2 步：准备引擎（用环境变量指向 ZIP）
+## 第 2 步：引擎准备（通常不需要）
+
+如果你拿到的 whl 已内置引擎（推荐分发方式），这一步可以跳过，直接看“第 3 步：快速测试”。
+
+### 如何确认 whl 是否已内置引擎
+
+安装 whl 后，执行：
+
+```powershell
+python -c "import audiodevice as ad; import os; from importlib import resources as r; p=r.files('audiodevice').joinpath('bin','audiodevice.exe'); print('bundled_exe=', os.fspath(p), 'exists=', p.is_file())"
+```
+
+如果输出 `exists=True`，说明引擎已随 whl 安装到 `site-packages/audiodevice/bin/`，**无需再管 exe/dll/zip**。
+
+### 若 whl 不包含引擎（才需要按下面做）
 
 通过环境变量让 SDK 找到引擎 ZIP，引擎会自动解包到缓存目录使用。按下面每一步操作即可。
 
-### 2.1 把引擎 ZIP 放到固定目录
+#### 2.1 把引擎 ZIP 放到固定目录
 
 1. 选一个不会轻易删除的目录，例如 `C:\tools\audiodevice`。
 2. 打开 **PowerShell**，创建目录并复制 ZIP（请把路径改成你实际下载的位置和 ZIP 文件名）：
@@ -32,7 +47,7 @@ copy "C:\你的下载路径\audiodevice_engine_win64_xxx.zip" "C:\tools\audiodev
 
 3. 记下 ZIP 的**完整路径**，例如：`C:\tools\audiodevice\audiodevice_engine_win64_20260305.zip`（后面设置环境变量要用）。
 
-### 2.2 添加环境变量 `AUDIODEVICE_ENGINE_URL`（永久，配置一次即可）
+#### 2.2 添加环境变量 `AUDIODEVICE_ENGINE_URL`（永久，配置一次即可）
 
 环境变量告诉 Python SDK 引擎 ZIP 在哪里。请按下面任一种方式**永久**添加，配置后无需再设。
 
@@ -77,7 +92,7 @@ python -c "import audiodevice as ad; ad.init(); print(ad.query_backends()); prin
 ## 常见问题（用户视角）
 
 - **提示找不到引擎 / 启动失败**：
-  - 确认已按第 2 步设置环境变量 `AUDIODEVICE_ENGINE_URL`（值为 ZIP 的**完整路径**）。
+  - 如果你的 whl 不包含引擎：确认已按第 2 步设置环境变量 `AUDIODEVICE_ENGINE_URL`（值为 ZIP 的**完整路径**）。
   - 若刚设置永久环境变量，需**关闭并重新打开** PowerShell 或 IDE 再试。
 - **第一次运行很慢（几秒到十几秒）**：属于正常现象（首次启动引擎 + 枚举设备），后续会更快。
 - **防火墙弹窗**：允许 `audiodevice.exe` 本地回环（127.0.0.1）通信即可。
