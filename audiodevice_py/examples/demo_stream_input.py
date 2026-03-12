@@ -22,6 +22,7 @@ SAMPLERATE = 48_000
 BLOCKSIZE = 1024
 CHANNELS = 1
 DURATION_MS = 3000
+TARGET_FRAMES = int(round(SAMPLERATE * (DURATION_MS / 1000.0)))
 
 # 对 Stream demo 更稳一些（避免调度抖动导致的缓冲问题）
 ad.default.samplerate = SAMPLERATE
@@ -39,13 +40,23 @@ def save_wav(path: Path, data_f32: np.ndarray, samplerate: int, channels: int) -
 
 
 chunks = []
-n_blocks = [0]
+frames_captured = [0]
 
 
 def callback(indata, outdata, frames, time_info, status):
-    n_blocks[0] += 1
     # 复制一份保存（indata 可能在后续回调中被复用）
-    chunks.append(indata.copy())
+    remain = TARGET_FRAMES - frames_captured[0]
+    if remain <= 0:
+        raise ad.CallbackStop()
+
+    # 只取需要的帧数，保证最终 WAV 时长精确等于 DURATION_MS（按采样率换算）
+    take = int(frames) if int(frames) < int(remain) else int(remain)
+    if take > 0:
+        chunks.append(indata[:take].copy())
+        frames_captured[0] += int(take)
+
+    if frames_captured[0] >= TARGET_FRAMES:
+        raise ad.CallbackStop()
 
 
 out_path = Path(__file__).resolve().parent / "demo_stream_input_recording.wav"
@@ -58,13 +69,18 @@ stream = ad.InputStream(
     blocksize=BLOCKSIZE,
 )
 stream.start()
-ad.sleep(DURATION_MS)
+# 注意：sleep 只是“等待”，实际精确停止由 callback 中的 TARGET_FRAMES 控制
+ad.sleep(DURATION_MS + 500)
 stream.close()
 
 if chunks:
     data = np.concatenate(chunks, axis=0)
+    # 双保险：截断到目标帧数，避免任何边界条件导致略长
+    if data.shape[0] > TARGET_FRAMES:
+        data = data[:TARGET_FRAMES]
     save_wav(out_path, data, SAMPLERATE, CHANNELS)
-    print(f"完成，保存 WAV: {out_path}")
+    dur_s = data.shape[0] / SAMPLERATE
+    print(f"完成，保存 WAV: {out_path}  (frames={data.shape[0]}, duration={dur_s:.3f}s)")
 else:
     print("没有录到数据（可尝试切换 HostAPI/设备）。")
 

@@ -26,11 +26,14 @@ DURATION_S = 3.0
 FREQ = 1000.0
 VOLUME = 0.1
 OUT_CH = 2
-IN_CH = 2
+IN_CH = 6
 
 # 更稳一些（避免调度抖动导致的缓冲问题）
 ad.default.samplerate = SAMPLERATE
 ad.default.rb_seconds = 8
+ad.default.device = (14,18)
+ad.default.channels = (6,2)
+print(ad.default.device)
 
 
 def main() -> None:
