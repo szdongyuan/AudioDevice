@@ -24,8 +24,8 @@ ENV/
 
 # Packaging / build outputs (Python SDK)
 audiodevice_py/examples/test.py
+audiodevice_py/examples/test sd.py
 audiodevice_py/build/
-//audiodevice_py/dist/
 audiodevice_py/*.egg-info/
 
 # Local engine artifacts
@@ -53,12 +53,20 @@ audio_engine/{
 audio_engine/src/record.wav
 audio_engine/src/record.pkf
 
+# ===== Audio files =====
+*.wav
+*.WAV
+
 # ===== Repo packaging outputs =====
+# 只上传：release_*.zip 和下面 4 份 md，其它 dist 内容不跟踪
 dist/staging/
 dist/*.zip
 !dist/release_*.zip
-!dist/release_20260311_132624.zip
-!dist/audiodevice_engine_win64_*.zip
+dist/*
+!dist/API_USAGE.md
+!dist/INSTALL.md
+!dist/INSTALL_zh_CN.md
+!dist/README_ENGINE.md
 
 # Local extracted engine folders (from ZIP) and loose DLLs
 dist/audiodevice_engine_win64_*/

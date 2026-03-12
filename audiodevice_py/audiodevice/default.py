@@ -101,6 +101,42 @@ class _DefaultHolder:
         except Exception:
             pass
 
+    def _validate_device_index(self, idx: int, which: str, prop_name: str) -> Optional[dict]:
+        """Validate a device index for the requested direction.
+
+        Args:
+            idx (int): Global device index from `query_devices()`. `-1` means unspecified.
+            which (str): "input" or "output".
+            prop_name (str): Property name for error messages, e.g. `default.device_in`.
+
+        Returns:
+            Optional[dict]: The matching device dict, or None when `idx == -1`.
+
+        Raises:
+            ValueError: If the index is invalid or the device doesn't support the direction.
+        """
+        if idx == -1:
+            return None
+        if idx < -1:
+            raise ValueError(f"{prop_name} must be -1 or a valid {which} device index, got {idx}")
+
+        from .api import query_devices
+
+        try:
+            dev = query_devices(int(idx))
+        except ValueError:
+            raise ValueError(f"{prop_name} invalid {which} device index: {idx}") from None
+
+        channel_key = "max_input_channels" if which == "input" else "max_output_channels"
+        channels = int(dev.get(channel_key, 0) or 0)
+        if channels <= 0:
+            name = str(dev.get("name", ""))
+            raise ValueError(
+                f"{prop_name} invalid {which} device index: {idx} "
+                f"(device {name!r} does not support {which})"
+            )
+        return dev
+
     @property
     def hostapi(self) -> int:
         """Return the default host API index (read-only). Derived from current default.device / device_in / device_out."""
@@ -233,10 +269,12 @@ class _DefaultHolder:
 
     @property
     def device(self) -> _InputOutputPair:
-        """Return the default device selection as (input_index, output_index).
+        """Return the effective default device selection as (input_index, output_index).
 
         Only integer indices are stored; device names are not supported.
-        This is lazily resolved on first access when indices are (-1, -1).
+        The returned pair prefers explicit `device_in` / `device_out` overrides and
+        falls back to the raw `default.device` tuple. When all values are unspecified,
+        the raw tuple is lazily initialized from the selected host API on first access.
         """
         # Lazy-initialize to something meaningful on first access, similar to sd.default.device.
         if getattr(self, "_resolving_device", False):
@@ -275,7 +313,11 @@ class _DefaultHolder:
             finally:
                 super().__setattr__("_resolving_device", False)
 
-        di, do = self._cfg.device if isinstance(self._cfg.device, tuple) and len(self._cfg.device) == 2 else (-1, -1)
+        di_raw, do_raw = self._device_tuple_raw()
+        di_eff = int(getattr(self._cfg, "device_in", -1))
+        do_eff = int(getattr(self._cfg, "device_out", -1))
+        di = di_eff if di_eff >= 0 else int(di_raw)
+        do = do_eff if do_eff >= 0 else int(do_raw)
         return _InputOutputPair(int(di), int(do))
 
     @property
@@ -288,7 +330,9 @@ class _DefaultHolder:
         """Set default input device by index only (int). -1 = unspecified. Updates effective hostapi from this device."""
         if not isinstance(value, int):
             raise TypeError("default.device_in must be int (device index); -1 means unspecified")
-        self._cfg.device_in = int(value)
+        idx = int(value)
+        self._validate_device_index(idx, "input", "default.device_in")
+        self._cfg.device_in = idx
         self._sync_hostapi_from_device_index(self._cfg.device_in)
 
     @property
@@ -301,7 +345,9 @@ class _DefaultHolder:
         """Set default output device by index only (int). -1 = unspecified. Updates effective hostapi from this device."""
         if not isinstance(value, int):
             raise TypeError("default.device_out must be int (device index); -1 means unspecified")
-        self._cfg.device_out = int(value)
+        idx = int(value)
+        self._validate_device_index(idx, "output", "default.device_out")
+        self._cfg.device_out = idx
         self._sync_hostapi_from_device_index(self._cfg.device_out)
 
     @device.setter
@@ -323,6 +369,8 @@ class _DefaultHolder:
             return
         if isinstance(value, int):
             di = int(value)
+            self._validate_device_index(di, "input", "default.device")
+            self._validate_device_index(di, "output", "default.device")
             self._cfg.device = (di, di)
             self._cfg.device_in = -1
             self._cfg.device_out = -1
@@ -331,6 +379,19 @@ class _DefaultHolder:
         if isinstance(value, (list, tuple)) and len(value) == 2:
             di = int(value[0])
             do = int(value[1])
+            in_dev = self._validate_device_index(di, "input", "default.device")
+            out_dev = self._validate_device_index(do, "output", "default.device")
+            if in_dev is not None and out_dev is not None:
+                in_host = int(in_dev.get("hostapi", -1))
+                out_host = int(out_dev.get("hostapi", -1))
+                if in_host != out_host:
+                    in_name = str(in_dev.get("name", ""))
+                    out_name = str(out_dev.get("name", ""))
+                    raise ValueError(
+                        "default.device input/output must use same hostapi "
+                        f"(got input {di}:{in_name!r} on hostapi {in_host}, "
+                        f"output {do}:{out_name!r} on hostapi {out_host})"
+                    )
             self._cfg.device = (di, do)
             self._cfg.device_in = -1
             self._cfg.device_out = -1
