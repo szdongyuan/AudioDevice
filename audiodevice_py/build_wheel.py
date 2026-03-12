@@ -41,7 +41,7 @@ def main() -> int:
     print(f"Setting version to {version}")
     update_pyproject_version(version)
     r = subprocess.run(
-        [sys.executable, "-m", "build", "--wheel"],
+        [sys.executable, "-m", "build", "--wheel", "--no-isolation"],
         cwd=PROJECT_ROOT,
         shell=False,
     )

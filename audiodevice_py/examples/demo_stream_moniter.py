@@ -23,9 +23,11 @@ OUT_CH = 2
 DURATION_MS = 15000
 
 # 对 Stream demo 更稳一些（避免调度抖动导致的缓冲问题）
+ad.default.hostapi = "Windows WASAPI"
 ad.default.samplerate = SAMPLERATE
 ad.default.rb_seconds = 8
-
+ad.default.device = [10,12]
+print(ad.default.device)
 
 def callback(indata, outdata, frames, time_info, status):
     if outdata.shape[1] > 0 and indata.shape[1] > 0:

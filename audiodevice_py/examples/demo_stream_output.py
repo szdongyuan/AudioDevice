@@ -24,15 +24,14 @@ phase = [0.0]
 # 对 Stream demo 更稳一些（避免调度抖动导致的缓冲问题）
 ad.default.samplerate = SAMPLERATE
 ad.default.rb_seconds = 8
-
-
+# ad.default.device = [10,12]
+ad.default.device = [1,3]
 def callback(indata, outdata, frames, time_info, status):
     t = (phase[0] + np.arange(frames, dtype=np.float32)) / SAMPLERATE
     phase[0] += frames
     outdata[:, 0] = VOLUME * np.sin(2 * np.pi * FREQ * t)
     if outdata.shape[1] > 1:
         outdata[:, 1:] = outdata[:, 0:1]
-
 
 print("播放 1000Hz 正弦波 5 秒...")
 with ad.OutputStream(callback=callback, channels=2, samplerate=SAMPLERATE, blocksize=1024):
