@@ -2387,6 +2387,15 @@ class _StreamBase:
 
             frames = int(self.blocksize)
             block_dt = float(frames) / float(self.samplerate) if float(self.samplerate) > 0 else 0.0
+
+            # For output streams, pre-fill the engine ring buffer before entering
+            # the real-time paced loop.  This prevents underruns caused by
+            # Python-side timing jitter (GC, scheduling, TCP latency).
+            _prefill_n = 0
+            if self.kind == "output" and out_ch > 0 and block_dt > 0:
+                _prefill_s = min(2.0, float(getattr(default, 'rb_seconds', 2)) * 0.2)
+                _prefill_n = max(4, int(_prefill_s / block_dt))
+
             next_tick = time.perf_counter()
             status = CallbackFlags()
             while not self._stop.is_set():
@@ -2460,7 +2469,13 @@ class _StreamBase:
                         off += accepted
 
                 # Pace the loop roughly in real-time to avoid overfilling engine buffers.
-                if block_dt > 0:
+                # During pre-fill phase, skip pacing so blocks are sent as fast as the
+                # engine accepts them, building up a safety margin in the ring buffer.
+                if _prefill_n > 0:
+                    _prefill_n -= 1
+                    if _prefill_n == 0:
+                        next_tick = time.perf_counter()
+                elif block_dt > 0:
                     next_tick += block_dt
                     now = time.perf_counter()
                     sleep_s = next_tick - now
