@@ -31,6 +31,10 @@ cd audio_engine
 cargo build --release --features portaudio_backend
 ```
 
-If you keep `portaudio.dll` under `third_party/portaudio/bin`, the custom build script will attempt to
-copy it next to the built `audiodevice.exe` for local runs.
+Then copy the artifacts for the Python SDK / wheel bundling:
+
+- `audio_engine/target/release/audiodevice.exe` → `audiodevice_py/audiodevice/bin/`
+- `audio_engine/third_party/portaudio/bin/portaudio.dll` → `audiodevice_py/audiodevice/bin/` (optional, runtime)
+
+Tip: you can run `audiodevice_py/audiodevice/build_engine.ps1` to build + copy in one step.
 

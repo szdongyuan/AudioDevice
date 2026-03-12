@@ -1,5 +1,7 @@
 param(
-  [string]$OutZip = ""
+  [string]$OutZip = "",
+  # Optional: explicitly specify a directory containing audiodevice.exe / portaudio.dll
+  [string]$BinDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,12 +12,33 @@ function Require-File([string]$p) {
   }
 }
 
-# 固定从 audiodevice_dy 的 release 构建目录取文件
-$binDir = "E:\2026\3\audiodevice_dy\audio_engine\target\release"
+function Try-Resolve-EngineBinDir([string]$RepoRoot, [string]$Preferred) {
+  if (-not [string]::IsNullOrWhiteSpace($Preferred)) {
+    if (Test-Path -LiteralPath $Preferred) { return $Preferred }
+    throw "BinDir not found: $Preferred"
+  }
+
+  # Prefer Python package bin (the wheel-bundled location).
+  $cand1 = Join-Path $RepoRoot "audiodevice_py\audiodevice\bin"
+  if (Test-Path -LiteralPath (Join-Path $cand1 "audiodevice.exe")) { return $cand1 }
+
+  # Fallback: Rust release dir.
+  $cand2 = Join-Path $RepoRoot "audio_engine\target\release"
+  if (Test-Path -LiteralPath (Join-Path $cand2 "audiodevice.exe")) { return $cand2 }
+
+  return $null
+}
+
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+$binDir = Try-Resolve-EngineBinDir $RepoRoot $BinDir
+if (-not $binDir) {
+  throw "Cannot locate engine bin dir. Build engine first (e.g. audiodevice_py\audiodevice\build_engine.ps1), or pass -BinDir."
+}
+
 $exe = Join-Path $binDir "audiodevice.exe"
 $paDll = Join-Path $binDir "portaudio.dll"
 Require-File $exe
-Require-File $paDll
+$hasDll = Test-Path -LiteralPath $paDll
 
 $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 if ([string]::IsNullOrWhiteSpace($OutZip)) {
@@ -31,7 +54,11 @@ if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Path $stage | Out-Null
 
 Copy-Item -LiteralPath $exe -Destination (Join-Path $stage "audiodevice.exe") -Force
-Copy-Item -LiteralPath $paDll -Destination (Join-Path $stage "portaudio.dll") -Force
+if ($hasDll) {
+  Copy-Item -LiteralPath $paDll -Destination (Join-Path $stage "portaudio.dll") -Force
+} else {
+  Write-Host "Note: portaudio.dll not found; packaging exe-only zip."
+}
 
 # Docs (kept in repo under dist/)
 $readme = Join-Path $PSScriptRoot "README_ENGINE.md"

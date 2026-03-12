@@ -16,9 +16,8 @@ dependencies = [
 package-dir = {"" = "."}
 
 [tool.setuptools.package-data]
-# Optional wheel-bundled engine artifacts (if you include them when building a wheel):
-# audiodevice/bin/audiodevice.exe
-# audiodevice/bin/portaudio.dll
+# Engine binaries bundled in the wheel; pip install deploys them to site-packages/audiodevice/bin/.
+# Run build_wheel.py to prepare bin/ (copy from audio_engine/target/release or extract from engine.zip) before building.
 audiodevice = ["bin/*.exe", "bin/*.dll"]
 
 [tool.setuptools.packages.find]

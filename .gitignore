@@ -58,15 +58,7 @@ audio_engine/src/record.pkf
 *.WAV
 
 # ===== Repo packaging outputs =====
-# 只上传：release_*.zip 和下面 4 份 md，其它 dist 内容不跟踪
 dist/staging/
-dist/*.zip
-!dist/release_*.zip
-dist/*
-!dist/API_USAGE.md
-!dist/INSTALL.md
-!dist/INSTALL_zh_CN.md
-!dist/README_ENGINE.md
 
 # Local extracted engine folders (from ZIP) and loose DLLs
 dist/audiodevice_engine_win64_*/

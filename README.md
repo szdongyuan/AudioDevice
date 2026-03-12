@@ -37,12 +37,17 @@ The PortAudio backend requires **`portaudio.lib`** (MSVC import library) at link
 - `audio_engine/third_party/portaudio/lib/portaudio.lib`
 - `audio_engine/third_party/portaudio/bin/portaudio.dll`
 
-2. Build with feature:
+2. Build with feature（stable 方案：先构建到 `target/release`，再复制到 Python 包的 `audiodevice/bin/`）:
 
 ```powershell
 cd audio_engine
 cargo build --release --features portaudio_backend
 ```
+
+然后将引擎产物放到 Python 包目录（推荐直接运行 `audiodevice_py/audiodevice/build_engine.ps1` 自动完成；脚本也会尝试从 vcpkg 目录自动定位 `portaudio.lib` / `portaudio.dll`）：
+
+- `audio_engine\target\release\audiodevice.exe` → `audiodevice_py\audiodevice\bin\`
+- （可选）`audio_engine\third_party\portaudio\bin\portaudio.dll` → `audiodevice_py\audiodevice\bin\`
 
 > Note: PortAudio can expose multiple Windows Host APIs (MME/DirectSound/WASAPI/ASIO) depending on
 > how you build the DLL.
