@@ -2117,6 +2117,15 @@ class CallbackFlags:
     output_overflow = False
     priming_output = False
 
+    # --- audiodevice_py extensions (best-effort) ---
+    # Callback timing diagnostics (seconds). Updated by the stream worker loop.
+    callback_seconds: float = 0.0
+    block_seconds: float = 0.0
+    callback_overrun: bool = False
+    callback_overrun_ratio: float = 0.0
+    callback_overrun_consecutive: int = 0
+    callback_overrun_total: int = 0
+
 
 class CallbackStop(Exception):
     """Raise from a stream callback to stop the stream gracefully."""
@@ -2398,6 +2407,8 @@ class _StreamBase:
 
             next_tick = time.perf_counter()
             status = CallbackFlags()
+            cb_overrun_consecutive = 0
+            cb_overrun_total = 0
             while not self._stop.is_set():
                 # Read input
                 indata = np.zeros((frames, in_ch), dtype=np.float32)
@@ -2423,11 +2434,47 @@ class _StreamBase:
                 }
 
                 try:
+                    cb_t0 = time.perf_counter()
                     self.callback(indata, outdata, frames, time_info, status)
+                    cb_s = time.perf_counter() - cb_t0
                 except CallbackStop:
                     break
                 except CallbackAbort:
                     break
+                except Exception as e:
+                    raise RuntimeError(f"Error in stream callback: {e}") from e
+
+                # Best-effort callback timing feedback.
+                status.callback_seconds = float(cb_s)
+                status.block_seconds = float(block_dt)
+                if block_dt > 0:
+                    ratio = float(cb_s) / float(block_dt) if float(block_dt) > 0 else 0.0
+                    overrun = bool(cb_s > block_dt)
+                else:
+                    ratio = 0.0
+                    overrun = False
+                status.callback_overrun = overrun
+                status.callback_overrun_ratio = float(ratio)
+                if overrun:
+                    cb_overrun_total += 1
+                    cb_overrun_consecutive += 1
+                else:
+                    cb_overrun_consecutive = 0
+                status.callback_overrun_consecutive = int(cb_overrun_consecutive)
+                status.callback_overrun_total = int(cb_overrun_total)
+
+                # If callback is consistently far slower than real-time, raise so user sees feedback.
+                # Keep thresholds conservative to avoid breaking borderline cases.
+                if (
+                    block_dt > 0
+                    and cb_overrun_consecutive >= 3
+                    and ratio >= 2.0
+                ):
+                    raise RuntimeError(
+                        "Stream callback overrun: "
+                        f"callback took {cb_s:.3f}s, block is {block_dt:.3f}s (x{ratio:.1f}); "
+                        "callback must be non-blocking."
+                    )
 
                 # Write output
                 if out_ch > 0:
