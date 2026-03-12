@@ -1174,26 +1174,35 @@ def rec_monitor(
     )
 
     if blocking:
+        target_frames = int(np.round(dur * float(fs)))
+        target_frames = max(target_frames, 1)
         chunks = []
-        t_end = time.time() + dur
+        got_frames = 0
+        timeout_at = time.time() + dur + 15.0
         try:
-            # Keep draining capture while monitoring to avoid ringbuffer overflow.
-            while time.time() < t_end:
-                x, _eof = h.read(4096)
+            # Do not stop by wall-clock here. Instead, read until we collected enough frames.
+            # This keeps rec_buf/WAV duration stable even if engine-stop or timing jitters.
+            while got_frames < target_frames and time.time() < timeout_at:
+                x, eof = h.read(4096)
                 if x.size:
                     chunks.append(x)
+                    got_frames += int(x.shape[0])
+                if eof and x.size == 0:
+                    break
                 time.sleep(0.005)
 
-            # Stop the session, then drain remaining capture until EOF.
+            # Stop the session, then drain remaining capture briefly (best-effort).
             try:
                 c.request({"cmd": "session_stop"})
             except Exception:
                 pass
 
-            while True:
+            drain_deadline = time.time() + 2.0
+            while time.time() < drain_deadline:
                 x, eof = h.read(4096)
                 if x.size:
                     chunks.append(x)
+                    got_frames += int(x.shape[0])
                 if eof and x.size == 0:
                     break
                 time.sleep(0.005)
@@ -1208,8 +1217,18 @@ def rec_monitor(
                         pass
 
         if not chunks:
-            return np.zeros((0, ch), dtype=np.float32)
-        return np.concatenate(chunks, axis=0)
+            y = np.zeros((target_frames, ch), dtype=np.float32)
+        else:
+            y = np.concatenate(chunks, axis=0)
+            if y.shape[0] < target_frames:
+                pad = np.zeros((target_frames - y.shape[0], y.shape[1]), dtype=np.float32)
+                y = np.concatenate([y, pad], axis=0)
+            elif y.shape[0] > target_frames:
+                y = y[:target_frames]
+
+        if save_wav and wav_path_abs:
+            _write_wav_from_float32(wav_path_abs, y, fs)
+        return y
 
     # Non-blocking: auto-stop by closing the session after duration_s.
     def _auto_stop() -> None:

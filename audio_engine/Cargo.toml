@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1"
-cpal = { version = "0.16", features = ["asio"] }
+cpal = { version = "0.16" }
 ctrlc = "3"
 portaudio = { version = "0.7", optional = true }
 serde = { version="1", features=["derive"] }

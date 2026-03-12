@@ -1,10 +1,14 @@
+import numpy as np
 import sounddevice as sd
 
-# channels_in = 6
 samplerate = 48000
-duration = 1  # 秒
+duration = 5  # 秒
+channels = 2  # 双声道输出，可改为1或其他
 
-print(f"录音 {duration} 秒 ({samplerate}Hz) ...")
-rec_buf = sd.rec(int(duration * samplerate), samplerate=samplerate, dtype='float32')
-sd.wait()  # 阻塞直到录音结束
-print("录音结束, shape:", rec_buf.shape)
+# 生成一段空白音频，全零
+blank_audio = np.zeros((int(duration * samplerate), channels), dtype='float32')
+
+print(f"播放 {duration} 秒空白音频 ({samplerate}Hz) ...")
+sd.play(blank_audio, samplerate=samplerate)
+sd.wait()  # 阻塞直到播放结束
+print("播放结束, shape:", blank_audio.shape)
