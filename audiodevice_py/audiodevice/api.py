@@ -1672,6 +1672,7 @@ def _playrec_engine(
     device_out: Optional[int] = None,
     rb_seconds: Optional[int] = None,
     chunk_frames: int = 4096,
+    delay_time_ms=0,
 ) -> np.ndarray:
     """Simultaneously play and record (duplex) using the engine.
 
@@ -1743,8 +1744,29 @@ def _playrec_engine(
         }
     )
 
+    delay_ms = 0.0 if delay_time_ms is None else float(delay_time_ms)
+    delay_frames = int(round(delay_ms * float(fs) / 1000.0)) if int(fs) > 0 else 0
+
     chunks = []
     try:
+        # Optional pre-roll: record before starting playback.
+        if delay_frames < 0 and int(in_ch) > 0:
+            pre = int(-delay_frames)
+            got = 0
+            deadline = time.time() + (float(pre) / float(fs) if float(fs) > 0 else 0.0) + 2.0
+            while got < pre and time.time() < deadline:
+                r = c.request({"cmd": "capture_read", "max_frames": int(min(chunk_frames, pre - got))})
+                pcm = base64.b64decode(r.get("pcm16_b64", "") or "")
+                got_frames = int(r.get("frames", 0))
+                got_ch = int(r.get("channels", 0))
+                if got_frames > 0 and got_ch > 0 and pcm:
+                    x0 = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32767.0
+                    x0 = x0.reshape(got_frames, got_ch)
+                    chunks.append(x0)
+                    got += int(got_frames)
+                else:
+                    time.sleep(0.002)
+
         for i in range(0, frames, int(chunk_frames)):
             blk = y[i : i + int(chunk_frames)]
             off = 0
@@ -1801,13 +1823,34 @@ def _playrec_engine(
             pass
         c.close()
 
+    if int(frames) <= 0:
+        return np.zeros((0, int(in_ch)), dtype=np.float32)
+
     if not chunks:
-        return np.zeros((0, in_ch), dtype=np.float32)
-    x = np.concatenate(chunks, axis=0)
-    if blocking and frames > 0 and x.shape[0] > int(frames):
-        x = x[: int(frames)]
-    # Ensure saved WAV matches returned array length and samplerate (engine may write different SR/duration).
-    if save_wav and wav_path_abs and x.shape[0] > 0:
+        x = np.zeros((0, int(in_ch)), dtype=np.float32)
+    else:
+        x = np.concatenate(chunks, axis=0)
+
+    # Ensure (frames, in_ch) and apply delay windowing.
+    if x.ndim == 1:
+        x = x[:, None]
+    if x.shape[1] != int(in_ch):
+        # Best-effort: pad or truncate channels to match requested in_ch.
+        if x.shape[1] < int(in_ch):
+            pad_ch = np.zeros((x.shape[0], int(in_ch) - x.shape[1]), dtype=np.float32)
+            x = np.concatenate([x, pad_ch], axis=1)
+        else:
+            x = x[:, : int(in_ch)]
+
+    start = int(delay_frames) if int(delay_frames) > 0 else 0
+    need = int(start) + int(frames)
+    if x.shape[0] < need:
+        pad = np.zeros((need - x.shape[0], int(in_ch)), dtype=np.float32)
+        x = np.concatenate([x, pad], axis=0)
+    x = x[start : start + int(frames)]
+
+    # Ensure saved WAV matches returned array length and samplerate.
+    if save_wav and wav_path_abs:
         _write_wav_from_float32(wav_path_abs, x, fs)
     return x
 
@@ -2022,7 +2065,16 @@ def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwar
     )
 
 
-def rec(frames=None, samplerate=None, channels=None, out=None, mapping=None, blocking=False, **kwargs):
+def rec(
+    frames=None,
+    samplerate=None,
+    channels=None,
+    out=None,
+    mapping=None,
+    blocking=False,
+    delay_time=0,
+    **kwargs,
+):
     """Record audio (audiodevice-compatible).
 
     Args:
@@ -2038,6 +2090,9 @@ def rec(frames=None, samplerate=None, channels=None, out=None, mapping=None, blo
             Format: non-empty sequence of 1-based channel indices, e.g. [1, 2].
         blocking: If True, record synchronously and return. If False, return immediately and
             fill out in a background thread (errors not raised).
+        delay_time: Delay before starting recording, in milliseconds. The returned recording
+            length still matches `frames` exactly (the whole capture window shifts later).
+            Format: non-negative float/int (ms).
         **kwargs: Optional compatibility args:
             - device (int|tuple[int,int]|None): Device index or (in_idx, out_idx).
             - wav_path (str): WAV file path when save_wav=True (required then).
@@ -2112,6 +2167,11 @@ def rec(frames=None, samplerate=None, channels=None, out=None, mapping=None, blo
                 in_idx = None
 
     def _do_record() -> np.ndarray:
+        delay_ms = 0.0 if delay_time is None else float(delay_time)
+        if delay_ms < 0:
+            raise ValueError("delay_time must be >= 0 (milliseconds)")
+        if delay_ms > 0:
+            time.sleep(float(delay_ms) / 1000.0)
         y = _rec_engine(
             frames_i,
             wav_path=wav_path,
@@ -2164,6 +2224,7 @@ def playrec(
     input_mapping=None,
     output_mapping=None,
     blocking=False,
+    delay_time=0,
     **kwargs,
 ):
     """Simultaneously play and record (audiodevice-compatible).
@@ -2183,6 +2244,11 @@ def playrec(
             Format: non-empty sequence, e.g. [1, 2] or [2, 1].
         blocking: If True, run synchronously and return recorded array. If False, run in background
             and return immediately.
+        delay_time: Recording delay relative to playback, in milliseconds.
+            - delay_time > 0: recording starts later (recorded window shifts later)
+            - delay_time < 0: recording starts earlier (captures pre-roll before playback)
+            The returned array length is always `len(data)` frames.
+            Format: float/int (ms).
         **kwargs: Optional compatibility args:
             - device (int|tuple[int,int]|None): Device index or (in_idx, out_idx).
             - wav_path (str): WAV path for recorded audio when save_wav=True (required then).
@@ -2287,6 +2353,7 @@ def playrec(
             device_out=dev_out_name,
             rb_seconds=rb_seconds,
             chunk_frames=chunk_frames,
+            delay_time_ms=delay_time,
         )
         return x
 
@@ -2383,6 +2450,7 @@ class _StreamBase:
         latency=None,
         channels=None,
         callback=None,
+        delay_time=0,
     ) -> None:
         """Create a stream object (not started yet).
 
@@ -2400,6 +2468,8 @@ class _StreamBase:
                 Format: indata (frames, in_ch) float32; outdata (frames, out_ch) float32, write in
                 callback; frames int; time_info dict; status CallbackFlags. Raise CallbackStop or
                 CallbackAbort to end the stream.
+            delay_time: Delay before starting to deliver input to the callback, in milliseconds.
+                This is mainly useful for capture-only streams (InputStream). Format: float/int (ms).
         """
         self.kind = str(kind)
         self.samplerate = float(samplerate) if samplerate is not None else (
@@ -2409,6 +2479,7 @@ class _StreamBase:
         self.latency = latency
         self.channels = channels
         self.callback = callback
+        self.delay_time = 0.0 if delay_time is None else float(delay_time)
 
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
@@ -2620,6 +2691,30 @@ class _StreamBase:
             frames = int(self.blocksize)
             block_dt = float(frames) / float(self.samplerate) if float(self.samplerate) > 0 else 0.0
 
+            # Optional capture delay for InputStream: discard initial frames so the effective
+            # recording window starts later, while keeping the same callback frame counts.
+            delay_remain = 0
+            if self.kind == "input" and int(in_ch) > 0:
+                delay_frames = int(round(float(self.delay_time) * float(self.samplerate) / 1000.0))
+                if delay_frames > 0:
+                    drained = 0
+                    # Drain most of the delay in big chunks, but leave <1 block to be
+                    # handled inside the main loop. This avoids a systematic +1 block
+                    # latency between "drain finished" and "first callback block read".
+                    drain_target = max(0, int(delay_frames) - int(frames))
+                    deadline = time.time() + (float(delay_frames) / float(self.samplerate) if float(self.samplerate) > 0 else 0.0) + 2.0
+                    while drained < drain_target and (not self._stop.is_set()) and time.time() < deadline:
+                        # Drain in larger chunks than blocksize to reduce round-trip overhead,
+                        # otherwise small blocksize would inflate the observed delay.
+                        drain_chunk = max(1024, int(min(4096, drain_target - drained)))
+                        r = c.request({"cmd": "capture_read", "max_frames": int(drain_chunk)})
+                        got_frames = int(r.get("frames", 0))
+                        if got_frames > 0:
+                            drained += got_frames
+                        else:
+                            time.sleep(0.002)
+                    delay_remain = max(0, int(delay_frames) - int(drained))
+
             # For output streams, pre-fill the engine ring buffer before entering
             # the real-time paced loop.  This prevents underruns caused by
             # Python-side timing jitter (GC, scheduling, TCP latency).
@@ -2636,17 +2731,44 @@ class _StreamBase:
                 # Read input
                 indata = np.zeros((frames, in_ch), dtype=np.float32)
                 if in_ch > 0:
-                    r = c.request({"cmd": "capture_read", "max_frames": int(frames)})
-                    got_frames = int(r.get("frames", 0))
-                    got_ch = int(r.get("channels", 0))
-                    if got_frames > 0 and got_ch > 0:
-                        pcm = base64.b64decode(r["pcm16_b64"])
+                    # If delay_time is enabled for InputStream, drop initial samples until
+                    # delay_remain is consumed, then deliver full blocks to the callback.
+                    filled = 0
+                    got_ch_eff = 0
+                    while filled < frames and (not self._stop.is_set()):
+                        r = c.request({"cmd": "capture_read", "max_frames": int(frames - filled)})
+                        got_frames = int(r.get("frames", 0))
+                        got_ch = int(r.get("channels", 0))
+                        if got_frames <= 0 or got_ch <= 0:
+                            time.sleep(0.002)
+                            continue
+
+                        pcm = base64.b64decode(r.get("pcm16_b64", "") or "")
+                        if not pcm:
+                            time.sleep(0.002)
+                            continue
+
                         x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32767.0
                         x = x.reshape(got_frames, got_ch)
-                        if got_frames < frames:
-                            indata[:got_frames, :got_ch] = x
-                        else:
-                            indata[:, :got_ch] = x[:frames]
+                        got_ch_eff = int(got_ch)
+
+                        if delay_remain > 0:
+                            if got_frames <= int(delay_remain):
+                                delay_remain -= int(got_frames)
+                                # Do not call callback yet; continue draining.
+                                continue
+                            # Partial drop within this chunk.
+                            drop = int(delay_remain)
+                            x = x[drop:]
+                            got_frames = int(x.shape[0])
+                            delay_remain = 0
+
+                        if got_frames <= 0:
+                            continue
+
+                        take = int(min(got_frames, frames - filled))
+                        indata[filled : filled + take, :take and got_ch_eff] = x[:take]
+                        filled += take
 
                 outdata = np.zeros((frames, out_ch), dtype=np.float32)
                 tnow = time.time()

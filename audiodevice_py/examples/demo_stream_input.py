@@ -23,6 +23,7 @@ BLOCKSIZE = 1024
 CHANNELS = 1
 DURATION_MS = 3000
 TARGET_FRAMES = int(round(SAMPLERATE * (DURATION_MS / 1000.0)))
+DELAY_MS = 200
 
 # 对 Stream demo 更稳一些（避免调度抖动导致的缓冲问题）
 ad.default.samplerate = SAMPLERATE
@@ -60,17 +61,18 @@ def callback(indata, outdata, frames, time_info, status):
 
 
 out_path = Path(__file__).resolve().parent / "demo_stream_input_recording.wav"
-print(f"录音 {DURATION_MS}ms -> {out_path.name} ...")
+print(f"录音 {DURATION_MS}ms (delay={DELAY_MS}ms) -> {out_path.name} ...")
 
 stream = ad.InputStream(
     callback=callback,
     channels=CHANNELS,
     samplerate=SAMPLERATE,
     blocksize=BLOCKSIZE,
+    delay_time=int(DELAY_MS),
 )
 stream.start()
 # 注意：sleep 只是“等待”，实际精确停止由 callback 中的 TARGET_FRAMES 控制
-ad.sleep(DURATION_MS + 500)
+ad.sleep(DURATION_MS + DELAY_MS + 500)
 stream.close()
 
 if chunks:

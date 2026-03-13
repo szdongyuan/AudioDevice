@@ -42,10 +42,11 @@ def main() -> None:
     y = 0.1 * np.sin(2 * np.pi * 1000* t).astype(np.float32)
     y = np.stack([y, y], axis=1)  # (frames, channels)
 
-    wav_path = os.path.join(os.path.dirname(__file__), "playrec.wav")
+    delay_ms = 1000
+    wav_path = os.path.join(os.path.dirname(__file__), "playrecdelay1000.wav")
     # On some devices/drivers, the recorded WAV may contain a small tail.
     # Save an exact-length WAV by trimming/padding to the target frame count.
-    x = ad.playrec(y, save_wav=False, blocking=True)
+    x = ad.playrec(y, save_wav=True, blocking=True, delay_time=delay_ms,wav_path=wav_path)
     x = np.asarray(x)
     if x.shape[0] < frames:
         pad = np.zeros((frames - x.shape[0],) + x.shape[1:], dtype=x.dtype)

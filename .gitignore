@@ -59,6 +59,10 @@ audio_engine/src/record.pkf
 *.wav
 *.WAV
 
+# ===== Local demo artifacts (do not commit) =====
+*.npy
+*.png
+
 # ===== Repo packaging outputs =====
 dist/staging/
 

@@ -27,6 +27,7 @@ FREQ = 1000.0
 VOLUME = 0.1
 OUT_CH = 2
 IN_CH = 6
+DELAY_MS = 200
 
 # 更稳一些（避免调度抖动导致的缓冲问题）
 ad.default.samplerate = SAMPLERATE
@@ -53,6 +54,7 @@ def main() -> None:
         blocking=True,
         samplerate=fs,
         in_channels=int(IN_CH),
+        delay_time=int(DELAY_MS),
     )
     print("captured:", x.shape, x.dtype)
     print("wav:", os.path.abspath(str(wav_path)))

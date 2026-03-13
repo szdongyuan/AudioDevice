@@ -19,8 +19,16 @@ def main() -> None:
     ad.default.device = (14,18)
     ad.default.channels = (6,2)
 
+    delay_ms = 200
     wav_path = os.path.join(os.path.dirname(__file__), "rec88888.wav")
-    y = ad.rec(48000*3, blocking=True, wav_path=wav_path, save_wav=True, channels=6)
+    y = ad.rec(
+        48000 * 3,
+        blocking=True,
+        wav_path=wav_path,
+        save_wav=True,
+        channels=6,
+        delay_time=delay_ms,
+    )
     print("recorded:", y.shape, y.dtype, "min/max:", float(y.min()), float(y.max()))
     ad.play(y, blocking=True,samplerate=48000,channels=2)
 
