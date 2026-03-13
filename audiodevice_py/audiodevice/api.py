@@ -1183,7 +1183,6 @@ def rec_monitor(
     monitor_channel: Optional[int] = None,
     samplerate: Optional[int] = None,
     channels: Optional[int] = None,
-    hostapi: Optional[str] = None,
     device_in: Optional[int] = None,
     device_out: Optional[int] = None,
     rb_seconds: Optional[int] = None,
@@ -1205,8 +1204,6 @@ def rec_monitor(
             Format: int or None, e.g. 44100.
         channels: Number of input channels to record. Uses default.channels[0] or 1 if None.
             Format: int or None.
-        hostapi: Host API display name, e.g. "MME", "Windows WASAPI".
-            Format: str or None.
         device_in: Input device index (global index from query_devices()). None = use default.
             Only int is accepted; device names are not supported.
         device_out: Output device index used for monitoring playback. None = use default.
@@ -1246,7 +1243,7 @@ def rec_monitor(
     rb_send = max(rb_send, int(np.ceil(dur)) + 1, 2)
 
     hostapi_eff, dev_in, dev_out = _resolve_hostapi_and_devices(
-        hostapi=hostapi,
+        hostapi=None,
         device_in=device_in,
         device_out=device_out,
     )
@@ -1912,7 +1909,6 @@ def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwar
             background thread and return immediately.
         loop: Whether to loop (not supported; kept for API compatibility).
         **kwargs: Optional compatibility args:
-            - hostapi (int|str|None): Host API selector, e.g. "MME", "Windows WASAPI".
             - device (int|tuple[int,int]|None): Device index or (input_index, output_index).
             - channels (int|None): Force output channel count (e.g. 1 or 2). If the selected
               output device supports fewer channels, audio is automatically downmixed/truncated.
@@ -1942,7 +1938,10 @@ def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwar
     if loop:
         raise NotImplementedError("loop is not supported in audiodevice.play()")
 
-    hostapi_override = _hostapi_name_from_any(kwargs.pop("hostapi", None)) if "hostapi" in kwargs else ""
+    if "hostapi" in kwargs:
+        raise TypeError(
+            "play() does not accept hostapi; set ad.default.device (or ad.default.device_out) to choose host API"
+        )
     device_kw = kwargs.pop("device", None) if "device" in kwargs else None
     channels_kw = kwargs.pop("channels", None) if "channels" in kwargs else None
     rb_seconds = kwargs.pop("rb_seconds", None)
@@ -1955,7 +1954,7 @@ def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwar
         y = y[:, None]
 
     dev_out_name = ""
-    hostapi_name = hostapi_override or str(getattr(default, "hostapi_name", "") or "MME")
+    hostapi_name = str(getattr(default, "hostapi_name", "") or "MME")
 
     out_idx = _device_index_from_any(device_kw, "output")
     if out_idx is None:
@@ -2040,7 +2039,6 @@ def rec(frames=None, samplerate=None, channels=None, out=None, mapping=None, blo
         blocking: If True, record synchronously and return. If False, return immediately and
             fill out in a background thread (errors not raised).
         **kwargs: Optional compatibility args:
-            - hostapi (int|str|None): Host API selector.
             - device (int|tuple[int,int]|None): Device index or (in_idx, out_idx).
             - wav_path (str): WAV file path when save_wav=True (required then).
             - save_wav (bool): Whether to also write a WAV file.
@@ -2068,7 +2066,10 @@ def rec(frames=None, samplerate=None, channels=None, out=None, mapping=None, blo
     if frames_i < 0:
         raise ValueError("frames must be >= 0")
 
-    hostapi_override = _hostapi_name_from_any(kwargs.pop("hostapi", None)) if "hostapi" in kwargs else ""
+    if "hostapi" in kwargs:
+        raise TypeError(
+            "rec() does not accept hostapi; set ad.default.device (or ad.default.device_in) to choose host API"
+        )
     device_kw = kwargs.pop("device", None) if "device" in kwargs else None
     wav_path = str(kwargs.pop("wav_path", "") or "")
     save_wav = bool(kwargs.pop("save_wav", False))
@@ -2118,7 +2119,7 @@ def rec(frames=None, samplerate=None, channels=None, out=None, mapping=None, blo
             blocking=True,
             samplerate=int(fs),
             channels=int(ch_i),
-            hostapi=hostapi_override or None,
+            hostapi=None,
             device_in=in_idx,
             rb_seconds=rb_seconds,
         )
@@ -2183,7 +2184,6 @@ def playrec(
         blocking: If True, run synchronously and return recorded array. If False, run in background
             and return immediately.
         **kwargs: Optional compatibility args:
-            - hostapi (int|str|None): Host API selector.
             - device (int|tuple[int,int]|None): Device index or (in_idx, out_idx).
             - wav_path (str): WAV path for recorded audio when save_wav=True (required then).
             - save_wav (bool): Whether to save recorded audio to WAV.
@@ -2213,7 +2213,10 @@ def playrec(
             cols.append(ci)
         data = y_out0[:, cols]
 
-    hostapi_override = _hostapi_name_from_any(kwargs.pop("hostapi", None)) if "hostapi" in kwargs else ""
+    if "hostapi" in kwargs:
+        raise TypeError(
+            "playrec() does not accept hostapi; set ad.default.device to choose host API for duplex"
+        )
     device_kw = kwargs.pop("device", None) if "device" in kwargs else None
     wav_path = str(kwargs.pop("wav_path", "") or "")
     save_wav = bool(kwargs.pop("save_wav", False))
@@ -2246,7 +2249,7 @@ def playrec(
         if out_arr.ndim != 2 or int(out_arr.shape[1]) != int(in_ch):
             raise ValueError("out must have shape (frames, channels)")
 
-    hostapi_name = hostapi_override or str(getattr(default, "hostapi_name", "") or "MME")
+    hostapi_name = str(getattr(default, "hostapi_name", "") or "MME")
     dev_in_name = ""
     dev_out_name = ""
 
@@ -2266,9 +2269,7 @@ def playrec(
         hostapi_name, dev_in_name = _device_name_from_index(int(in_idx))
     if out_idx is not None and out_idx >= 0:
         hostapi2, dev_out_name = _device_name_from_index(int(out_idx))
-        if hostapi_override:
-            hostapi_name = hostapi_override
-        elif hostapi2 and hostapi_name and hostapi2.strip().upper() != hostapi_name.strip().upper():
+        if hostapi2 and hostapi_name and hostapi2.strip().upper() != hostapi_name.strip().upper():
             raise ValueError("input/output devices must belong to same hostapi")
         else:
             hostapi_name = hostapi2 or hostapi_name
@@ -2382,7 +2383,6 @@ class _StreamBase:
         latency=None,
         channels=None,
         callback=None,
-        hostapi=None,
     ) -> None:
         """Create a stream object (not started yet).
 
@@ -2400,8 +2400,6 @@ class _StreamBase:
                 Format: indata (frames, in_ch) float32; outdata (frames, out_ch) float32, write in
                 callback; frames int; time_info dict; status CallbackFlags. Raise CallbackStop or
                 CallbackAbort to end the stream.
-            hostapi: Host API selector.
-                Format: int or str or None, e.g. "MME", "ASIO".
         """
         self.kind = str(kind)
         self.samplerate = float(samplerate) if samplerate is not None else (
@@ -2411,7 +2409,6 @@ class _StreamBase:
         self.latency = latency
         self.channels = channels
         self.callback = callback
-        self.hostapi = hostapi
 
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
@@ -2537,9 +2534,7 @@ class _StreamBase:
         Returns:
             tuple[str, str, str]: `(hostapi_name, device_in_name, device_out_name)`.
         """
-        hostapi_name = _hostapi_name_from_any(self.hostapi) if self.hostapi is not None else ""
-        if not hostapi_name:
-            hostapi_name = str(getattr(default, "hostapi_name", "") or "MME")
+        hostapi_name = str(getattr(default, "hostapi_name", "") or "MME")
 
         dev_in = ""
         dev_out = ""
@@ -2834,7 +2829,6 @@ def rec_long(
     rotate_s: float = 300.0,
     samplerate: Optional[int] = None,
     channels: Optional[int] = None,
-    hostapi: Optional[str] = None,
     device_in: Optional[int] = None,
     rb_seconds: Optional[int] = None,
 ) -> LongRecordingHandle:
@@ -2849,8 +2843,6 @@ def rec_long(
             Format: int or None.
         channels: Number of input channels. Uses default.channels[0] or 1 if None.
             Format: int or None.
-        hostapi: Host API display name.
-            Format: str or None.
         device_in: Input device index (global index from query_devices()). None = use default. Only int accepted.
         rb_seconds: Engine ring buffer size in seconds.
             Format: int or None.
@@ -2867,7 +2859,7 @@ def rec_long(
     path_abs = os.path.abspath(path)
 
     hostapi_eff, dev_in, _dev_out = _resolve_hostapi_and_devices(
-        hostapi=hostapi,
+        hostapi=None,
         device_in=device_in,
         device_out=None,
     )

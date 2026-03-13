@@ -26,9 +26,15 @@ def _pick_asio_device_index(direction: str) -> int:
     if asio_hi is None:
         return -1
     all_devs = ad.query_devices()
-    candidates = [d for d in all_devs if int(d.get("hostapi", -1)) == asio_hi and (int(d.get("max_input_channels", 0) or 0) > 0]
+    key = "max_input_channels" if str(direction).strip().lower() == "input" else "max_output_channels"
+    candidates = [
+        d
+        for d in all_devs
+        if int(d.get("hostapi", -1)) == asio_hi and int(d.get(key, 0) or 0) > 0
+    ]
     if not candidates:
-        print("[warning] 未发现 ASIO 输入设备，请检查 ASIO4ALL/声卡 是否已选择输入通道")
+        io = "输入" if str(direction).strip().lower() == "input" else "输出"
+        print(f"[warning] 未发现 ASIO {io}设备，请检查 ASIO4ALL/声卡 是否已选择对应通道")
         return -1
     for prefer in ("UMC", "ASIO"):
         for d in candidates:
@@ -57,7 +63,6 @@ def _try_rec_asio(
                     blocking=True,
                     samplerate=sr,
                     channels=ch,
-                    hostapi="ASIO",
                     device_in=device_in,
                     save_wav=True,
                     wav_path=wav_path,
