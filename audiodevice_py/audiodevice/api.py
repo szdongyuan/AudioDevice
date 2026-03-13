@@ -23,6 +23,114 @@ _LIST_TIMEOUT_S = 30.0
 
 _ENGINE_LOCK = threading.Lock()
 _ENGINE_PROC: Optional[subprocess.Popen] = None
+# Windows-only: keep a Job Object handle alive so the engine process is
+# automatically terminated when this Python process exits (even abruptly).
+_ENGINE_JOB_HANDLE: Optional[int] = None
+
+
+def _win32_job_add_process_kill_on_close(proc: subprocess.Popen) -> None:
+    """Best-effort: ensure a spawned engine is killed when Python exits (Windows).
+
+    On Windows, child processes do NOT automatically terminate when the parent process
+    exits. To avoid leaving `audiodevice.exe` running in the background, we place it
+    in a Job Object configured with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.
+    """
+    if os.name != "nt":
+        return
+
+    # Lazily import and define Windows-only pieces.
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:
+        return
+
+    global _ENGINE_JOB_HANDLE
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    JobObjectExtendedLimitInformation = 9
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+
+    SIZE_T = ctypes.c_size_t
+    ULONG_PTR = wintypes.WPARAM
+
+    class LARGE_INTEGER(ctypes.Structure):
+        _fields_ = [("QuadPart", ctypes.c_longlong)]
+
+    class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", LARGE_INTEGER),
+            ("PerJobUserTimeLimit", LARGE_INTEGER),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", SIZE_T),
+            ("MaximumWorkingSetSize", SIZE_T),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ULONG_PTR),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class IO_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_uint64),
+            ("WriteOperationCount", ctypes.c_uint64),
+            ("OtherOperationCount", ctypes.c_uint64),
+            ("ReadTransferCount", ctypes.c_uint64),
+            ("WriteTransferCount", ctypes.c_uint64),
+            ("OtherTransferCount", ctypes.c_uint64),
+        ]
+
+    class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+            ("IoInfo", IO_COUNTERS),
+            ("ProcessMemoryLimit", SIZE_T),
+            ("JobMemoryLimit", SIZE_T),
+            ("PeakProcessMemoryUsed", SIZE_T),
+            ("PeakJobMemoryUsed", SIZE_T),
+        ]
+
+    k32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+    k32.CreateJobObjectW.restype = wintypes.HANDLE
+    k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, wintypes.INT, wintypes.LPVOID, wintypes.DWORD]
+    k32.SetInformationJobObject.restype = wintypes.BOOL
+    k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    k32.AssignProcessToJobObject.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.CloseHandle.restype = wintypes.BOOL
+
+    job = _ENGINE_JOB_HANDLE
+    if not job:
+        job_h = k32.CreateJobObjectW(None, None)
+        if not job_h:
+            return
+
+        info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        ok = k32.SetInformationJobObject(
+            job_h,
+            JobObjectExtendedLimitInformation,
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+        )
+        if not ok:
+            try:
+                k32.CloseHandle(job_h)
+            except Exception:
+                pass
+            return
+
+        _ENGINE_JOB_HANDLE = int(job_h)
+        job = _ENGINE_JOB_HANDLE
+
+    ph = getattr(proc, "_handle", None) or getattr(proc, "handle", None)
+    if not ph:
+        return
+
+    # Best-effort: if the process is already in a Job (and the environment doesn't
+    # allow nested jobs), this may fail with ERROR_ACCESS_DENIED.
+    _ = k32.AssignProcessToJobObject(wintypes.HANDLE(job), wintypes.HANDLE(int(ph)))
 
 _CACHE_LOCK = threading.Lock()
 _CACHED_HOSTAPIS: Optional[Tuple[List[str], Dict[str, List[str]]]] = None
@@ -716,6 +824,10 @@ def _ensure_engine_running() -> Optional[subprocess.Popen]:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            try:
+                _win32_job_add_process_kill_on_close(proc)
+            except Exception:
+                pass
             _ENGINE_PROC = proc
 
         deadline = time.time() + float(default.startup_timeout)
