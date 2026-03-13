@@ -67,7 +67,13 @@ if ($env:PORTAUDIO_LIB_DIR) {
   }
 }
 
-cargo build --release --features portaudio_backend
+# Build engine.
+#
+# - portaudio_backend: enable PortAudio backend (MME/DirectSound/WASAPI, and ASIO if your portaudio.dll supports it)
+# - cpal_asio: enable CPAL ASIO host (requires ASIO SDK headers; set CPAL_ASIO_DIR if needed)
+#
+# NOTE: If you don't want ASIO support, remove `cpal_asio` from the feature list below.
+cargo build --release --features "portaudio_backend cpal_asio"
 
 $ExeSrc = Join-Path $EngineDir "target\release\audiodevice.exe"
 Copy-Item $ExeSrc $PyBinDir -Force

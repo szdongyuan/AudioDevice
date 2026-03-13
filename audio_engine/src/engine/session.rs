@@ -325,6 +325,7 @@ impl SessionInner {
             let mut bus_out_for_monitor = self.bus_out.clone_for_callback();
             let in_ch_usize = in_cfg.channels as usize;
             let out_ch_usize = out_cfg.channels as usize;
+            let monitor_in_idx_opt = self.params.monitor_in_idx.map(|x| x as usize);
             let mut monitor_tmp: Vec<f32> = Vec::new();
             let need_wav_recorder = !self.params.path.is_empty();
 
@@ -382,10 +383,30 @@ impl SessionInner {
                 }
 
                 if is_monitor && out_ch_usize > 0 {
-                    if in_ch_usize == out_ch_usize {
+                    if let Some(mi_raw) = monitor_in_idx_opt {
+                        // Monitor a specific input channel (duplicate to all outputs).
+                        // Clamp for robustness (should be validated by client).
+                        let mi = if in_ch_usize == 0 {
+                            0
+                        } else {
+                            mi_raw.min(in_ch_usize - 1)
+                        };
+                        monitor_tmp.clear();
+                        monitor_tmp.reserve(frames * out_ch_usize);
+                        for f in 0..frames {
+                            let base = f * in_ch_usize;
+                            let frame_in = &data[base..base + in_ch_usize];
+                            let v = frame_in[mi];
+                            for _ in 0..out_ch_usize {
+                                monitor_tmp.push(v);
+                            }
+                        }
+                        let _ = bus_out_for_monitor
+                            .push_samples_nonblocking(&monitor_tmp, &metrics_in);
+                    } else if in_ch_usize == out_ch_usize {
                         let _ = bus_out_for_monitor.push_samples_nonblocking(data, &metrics_in);
                     } else {
-                        // Lightweight channel mapping for monitoring (no resampling).
+                        // Legacy lightweight channel mapping for monitoring (no resampling).
                         // - 1 -> N: duplicate
                         // - N -> 1: average
                         // - N -> M: take first min(N,M), repeat last if M>N
@@ -418,7 +439,8 @@ impl SessionInner {
                                 }
                             }
                         }
-                        let _ = bus_out_for_monitor.push_samples_nonblocking(&monitor_tmp, &metrics_in);
+                        let _ = bus_out_for_monitor
+                            .push_samples_nonblocking(&monitor_tmp, &metrics_in);
                     }
                 }
 

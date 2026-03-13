@@ -322,12 +322,22 @@ class _DefaultHolder:
 
     @property
     def device_in(self) -> int:
-        """Default input device index. -1 means unspecified (use default.device[0] or hostapi default)."""
+        """Effective default input device index (equals int(default.device.input))."""
+        return int(self.device.input)
+
+    @property
+    def device_in_override(self) -> int:
+        """Override input device index. -1 means 'no override' (use default.device)."""
         return int(getattr(self._cfg, "device_in", -1))
+
+    @property
+    def device_in_effective(self) -> int:
+        """Alias for device_in (kept for compatibility)."""
+        return int(self.device_in)
 
     @device_in.setter
     def device_in(self, value: int) -> None:
-        """Set default input device by index only (int). -1 = unspecified. Updates effective hostapi from this device."""
+        """Set override input device by index only (int). -1 = no override. Updates effective hostapi from this device."""
         if not isinstance(value, int):
             raise TypeError("default.device_in must be int (device index); -1 means unspecified")
         idx = int(value)
@@ -335,20 +345,40 @@ class _DefaultHolder:
         self._cfg.device_in = idx
         self._sync_hostapi_from_device_index(self._cfg.device_in)
 
+    @device_in_override.setter
+    def device_in_override(self, value: int) -> None:
+        """Set override input device index. -1 = no override."""
+        type(self).device_in.fset(self, value)
+
     @property
     def device_out(self) -> int:
-        """Default output device index. -1 means unspecified (use default.device[1] or hostapi default)."""
+        """Effective default output device index (equals int(default.device.output))."""
+        return int(self.device.output)
+
+    @property
+    def device_out_override(self) -> int:
+        """Override output device index. -1 means 'no override' (use default.device)."""
         return int(getattr(self._cfg, "device_out", -1))
+
+    @property
+    def device_out_effective(self) -> int:
+        """Alias for device_out (kept for compatibility)."""
+        return int(self.device_out)
 
     @device_out.setter
     def device_out(self, value: int) -> None:
-        """Set default output device by index only (int). -1 = unspecified. Updates effective hostapi from this device."""
+        """Set override output device by index only (int). -1 = no override. Updates effective hostapi from this device."""
         if not isinstance(value, int):
             raise TypeError("default.device_out must be int (device index); -1 means unspecified")
         idx = int(value)
         self._validate_device_index(idx, "output", "default.device_out")
         self._cfg.device_out = idx
         self._sync_hostapi_from_device_index(self._cfg.device_out)
+
+    @device_out_override.setter
+    def device_out_override(self, value: int) -> None:
+        """Set override output device index. -1 = no override."""
+        type(self).device_out.fset(self, value)
 
     @device.setter
     def device(self, value: Union[int, Sequence[int], None]) -> None:
@@ -447,6 +477,12 @@ class _DefaultHolder:
             return
         if name == "device_out":
             type(self).device_out.fset(self, value)
+            return
+        if name == "device_in_override":
+            type(self).device_in_override.fset(self, value)
+            return
+        if name == "device_out_override":
+            type(self).device_out_override.fset(self, value)
             return
         setattr(self._cfg, name, value)
 

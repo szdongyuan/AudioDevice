@@ -143,6 +143,12 @@ h.stop()
 x = ad.rec_monitor(10.0, blocking=True, save_wav=True, wav_path="rec_monitor.wav")
 ```
 
+如果你的输入设备是多通道（例如 4/8 路），你可以选择监听其中某一路（1-based，1=CH1）：
+
+```python
+x = ad.rec_monitor(10.0, blocking=True, monitor_channel=3, save_wav=True, wav_path="rec_monitor.wav")
+```
+
 ## 常见提示
 
 - **第一次调用很慢**：正常（启动引擎 + 枚举设备），之后会快很多。
@@ -238,4 +244,5 @@ with ad.Stream(samplerate=48000, channels=(1, 1), blocksize=256, callback=cb):
 - **callback 必须快**：避免做耗时 I/O（写盘/网络）、避免大对象频繁分配；建议把数据放进队列，后台线程处理。
 - **ASIO 兼容性**：某些 ASIO 驱动在 streaming / 全双工下更容易失败；优先尝试 `Windows WASAPI` 或 `MME`。
 - **blocksize**：越小延迟越低，但 CPU 压力越大；建议从 `256/512/1024` 试起。
+- **设备选择**：Streaming API 统一使用 `ad.default.device`（以及 `ad.default.device_in/device_out`）；不再支持 `Stream(..., device=...)` 这种“每个 stream 单独指定设备”的用法。
 

@@ -46,6 +46,12 @@ pub struct SessionParams {
     pub in_ch: u16,
     pub out_ch: u16,
 
+    /// Optional input channel index (0-based) to monitor in monitor_record mode.
+    /// When set, the selected input channel is duplicated to all output channels.
+    /// When None, monitoring uses the legacy channel mapping behavior.
+    #[serde(default)]
+    pub monitor_in_idx: Option<u16>,
+
     #[serde(default)]
     pub device_in: String,
     #[serde(default)]

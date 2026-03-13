@@ -37,6 +37,7 @@ def main() -> None:
         ad.default.device = (idx, idx)
     ad.default.samplerate = 48_000
     ad.default.channels = 2
+    ad.default.device = (22,31)
 
     fs = ad.default.samplerate
     frames = int(fs * 5)

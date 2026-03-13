@@ -27,6 +27,22 @@ The engine binary will be at:
 
 - `audio_engine\target\release\audiodevice.exe`
 
+### CPAL + ASIO backend (optional)
+
+Your current engine reports `cpal` hostapis as `["WASAPI"]` only, which means it was built **without** CPAL's `asio` feature.  
+To make ASIO show up in `ad.query_hostapis_raw()["by_backend"]["cpal"]`, rebuild the engine with:
+
+```powershell
+cd audio_engine
+cargo build --release --features cpal_asio
+```
+
+Notes (Windows):
+
+- You need **LLVM/Clang** available for `bindgen`. If build fails, install LLVM and set `LIBCLANG_PATH` (pointing to LLVM `bin`).
+- If you already have an ASIO SDK locally, you can set `CPAL_ASIO_DIR` to its path; otherwise CPAL may try to download it during build (subject to Steinberg licensing/availability).
+- At runtime you still need an ASIO driver installed (e.g. vendor ASIO driver / ASIO4ALL).
+
 ### PortAudio backend (optional feature)
 
 The PortAudio backend requires **`portaudio.lib`** (MSVC import library) at link time and

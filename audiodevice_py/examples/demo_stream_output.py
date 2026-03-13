@@ -20,7 +20,7 @@ VOLUME = 0.5
 phase = [0.0]
 
 # 对 Stream demo 更稳一些（降低 Windows 调度抖动导致的杂音风险）
-# 重要：Stream API 只会使用显式传入的 device；因此这里既设置 default.device，也会在 OutputStream 里传 device=ad.default.device。
+# 重要：Stream API 统一使用 default.device；不再接受 Stream(..., device=...) 参数。
 ad.default.rb_seconds = 20
 
 # 方式 A（推荐）：只指定输出设备（OutputStream 不需要输入设备）
@@ -29,13 +29,12 @@ ad.default.rb_seconds = 20
 
 # 方式 B：同时指定 (输入设备index, 输出设备index)，两者必须同 hostapi
 ad.default.device = [15, 17]
-STREAM_DEVICE = tuple(ad.default.device)
 ad.print_default_devices()
-print(STREAM_DEVICE)    
+print(tuple(ad.default.device))
 
 # 尽量让采样率匹配实际输出设备，避免 WASAPI 下因格式/采样率不匹配引入的爆音/杂音
 try:
-    out_idx = int(STREAM_DEVICE[1])
+    out_idx = int(ad.default.device[1])
     out_dev = ad.query_devices(out_idx)
     SAMPLERATE = int(float(out_dev.get("default_samplerate", 48_000) or 48_000))
 except Exception:
@@ -44,7 +43,7 @@ ad.default.samplerate = SAMPLERATE
 
 # 这套 Python<->engine 的 callback 推流需要 base64 编码；blocksize 太小更容易造成欠载/杂音
 BLOCKSIZE = 8192
-print(f"Output samplerate={SAMPLERATE}, blocksize={BLOCKSIZE}, device={STREAM_DEVICE}")
+print(f"Output samplerate={SAMPLERATE}, blocksize={BLOCKSIZE}, device={tuple(ad.default.device)}")
 
 # # ====================== 单通道（Mono） ======================
 def callback(indata, outdata, frames, time_info, status):
@@ -72,7 +71,6 @@ with ad.OutputStream(
     channels=CHANNELS,
     samplerate=SAMPLERATE,
     blocksize=BLOCKSIZE,
-    device=STREAM_DEVICE,
 ):
     ad.sleep(5000)
 print("完成")

@@ -7,6 +7,7 @@ import wave
 import numpy as np
 
 import audiodevice as ad
+import time
 
 # 初始化引擎
 _root = Path(__file__).resolve().parent.parent
@@ -18,17 +19,19 @@ else:
 ad.print_default_devices()
 
 SAMPLERATE = 48_000
-BLOCKSIZE = 1024
+BLOCKSIZE = 4096
 IN_CH = 6
 OUT_CH = 2
 DURATION_MS = 3000
 TARGET_FRAMES = int(round(SAMPLERATE * (DURATION_MS / 1000.0)))
 SAVE_CH = int(OUT_CH)
+# 选择要监听的输入通道（1-based）：1=CH1, 2=CH2...
+MONITOR_CH = 4
 
 # 对 Stream demo 更稳一些（避免调度抖动导致的缓冲问题）
 ad.default.samplerate = SAMPLERATE
 ad.default.rb_seconds = 8
-ad.default.device = (14,18)
+ad.default.device = (22,30)
 print(ad.default.device)
 
 
@@ -58,16 +61,19 @@ def callback(indata, outdata, frames, time_info, status):
         if ch > 0:
             chunks.append(indata[:take, :ch].copy())
 
-    if outdata.shape[1] > 0 and indata.shape[1] > 0:
-        n = min(outdata.shape[1], indata.shape[1])
+    if outdata.shape[1] > 0:
         if take > 0:
-            outdata[:take, :n] = indata[:take, :n]
+            if indata.shape[1] > 0:
+                mi = int(MONITOR_CH) - 1
+                if 0 <= mi < int(indata.shape[1]):
+                    mono = indata[:take, mi]
+                    outdata[:take, :] = mono.reshape(-1, 1)
+                else:
+                    outdata[:take, :] = 0
+            else:
+                outdata[:take, :] = 0
         if int(frames) > int(take):
-            outdata[take:, :n] = 0
-        if outdata.shape[1] > n:
-            outdata[:, n:] = 0
-    elif outdata.shape[1] > 0:
-        outdata[:] = 0
+            outdata[take:, :] = 0
 
     frames_captured[0] += int(take)
     if frames_captured[0] >= TARGET_FRAMES:
@@ -83,9 +89,14 @@ stream = ad.Stream(
     blocksize=BLOCKSIZE,
 )
 stream.start()
-# 注意：sleep 只是“等待”，实际精确停止由 callback 中的 TARGET_FRAMES 控制
-ad.sleep(DURATION_MS + 500)
-stream.close()
+# 注意：回调的处理速度可能慢于实时（TCP 往返/调度等），所以不要用固定 sleep 来估算结束时刻。
+# 这里以回调累计的帧数为准等待结束，并设置一个宽松超时避免意外卡死。
+deadline = time.time() + (DURATION_MS / 1000.0) * 10.0 + 5.0
+try:
+    while frames_captured[0] < TARGET_FRAMES and time.time() < deadline:
+        ad.sleep(50)
+finally:
+    stream.close()
 
 if chunks:
     data = np.concatenate(chunks, axis=0)

@@ -247,7 +247,8 @@ def _hostapi_display_to_engine(hostapi_display: str) -> Tuple[str, str, str]:
         disp = "MME"
     if disp.lower().startswith("windows "):
         engine_name = disp[len("Windows ") :].strip()
-        return "portaudio", engine_name, disp
+        # Keep backend selection consistent with unprefixed names.
+        return _backend_for_hostapi(engine_name), engine_name, disp
     # Keep unprefixed names as engine names.
     return _backend_for_hostapi(disp), disp, disp
 
@@ -307,10 +308,10 @@ def _resolve_hostapi_and_devices(
     """
     hostapi_eff = str(hostapi or getattr(default, "hostapi_name", "") or "MME")
 
-    # Effective index: call argument if provided, else default.device_in/device_out if >= 0, else default.device tuple.
+    # Effective index: call argument if provided, else default.device_in_override/device_out_override if >= 0, else default.device tuple.
     di_raw, do_raw = default._device_tuple_raw()
-    def_in = int(getattr(default, "device_in", -1))
-    def_out = int(getattr(default, "device_out", -1))
+    def_in = int(getattr(default, "device_in_override", -1))
+    def_out = int(getattr(default, "device_out_override", -1))
     in_idx = device_in if device_in is not None else (def_in if def_in >= 0 else di_raw)
     out_idx = device_out if device_out is not None else (def_out if def_out >= 0 else do_raw)
 
@@ -533,13 +534,13 @@ def get_status() -> Optional[Dict[str, Any]]:
 def print_default_devices() -> None:
     """Print current default input and output device (index + name).
 
-    Uses effective indices: default.device_in / default.device_out if >= 0, else default.device.
+    Uses effective indices: default.device_in_override / default.device_out_override if >= 0, else default.device.
     Call this after `init()` if you want to quickly verify device selection.
     """
     try:
         di_raw, do_raw = default._device_tuple_raw()
-        def_in = int(getattr(default, "device_in", -1))
-        def_out = int(getattr(default, "device_out", -1))
+        def_in = int(getattr(default, "device_in_override", -1))
+        def_out = int(getattr(default, "device_out_override", -1))
         di = def_in if def_in >= 0 else int(di_raw)
         do = def_out if def_out >= 0 else int(do_raw)
         if di >= 0:
@@ -1179,6 +1180,7 @@ def rec_monitor(
     wav_path: str = "",
     save_wav: bool = False,
     blocking: bool = True,
+    monitor_channel: Optional[int] = None,
     samplerate: Optional[int] = None,
     channels: Optional[int] = None,
     hostapi: Optional[str] = None,
@@ -1196,6 +1198,9 @@ def rec_monitor(
         save_wav: Whether to also save a WAV file.
         blocking: If True, return the recorded array. If False, return a RecordingHandle for
             incremental reads.
+        monitor_channel: Which input channel to listen to during monitoring (1-based).
+            - 1 means CH1 (the first input channel), 2 means CH2, etc.
+            - None keeps the engine's legacy monitoring mapping behavior.
         samplerate: Target sample rate in Hz. Uses default.samplerate if None.
             Format: int or None, e.g. 44100.
         channels: Number of input channels to record. Uses default.channels[0] or 1 if None.
@@ -1226,6 +1231,13 @@ def rec_monitor(
     ch_def = default.channels[0] if getattr(default, "channels", None) is not None else None
     ch0 = int(channels if channels is not None else (int(ch_def) if ch_def is not None else 1))
 
+    monitor_in_idx: Optional[int] = None
+    if monitor_channel is not None:
+        mc = int(monitor_channel)
+        if mc < 1:
+            raise ValueError("monitor_channel must be >= 1 (1-based), or None")
+        monitor_in_idx = mc - 1
+
     if save_wav and not wav_path:
         raise ValueError("save_wav=True requires a non-empty wav_path")
     wav_path_abs = os.path.abspath(wav_path) if (save_wav and wav_path) else ""
@@ -1245,34 +1257,77 @@ def rec_monitor(
     ch = ch0
     tried = []
     last_err: Optional[Exception] = None
-    for fs_try in (fs0, 48_000, 44_100, 32_000, 16_000):
+
+    # Build a robust sample-rate candidate list:
+    # - Prefer the user's requested/default samplerate (fs0)
+    # - Then try the selected input device's reported default samplerate (if available)
+    # - Then fall back to common rates
+    dev_default_sr: Optional[int] = None
+    try:
+        hostapis_order, _ = _hostapis_all()
+        hi = -1
+        qh = str(hostapi_eff).strip().lower()
+        for i, hn in enumerate(hostapis_order):
+            if str(hn).strip().lower() == qh:
+                hi = int(i)
+                break
+        if hi >= 0 and dev_in:
+            devs = query_devices()
+            if isinstance(devs, list):
+                for d in devs:
+                    if str(d.get("name", "")) == str(dev_in) and int(d.get("hostapi", -1)) == hi:
+                        sr = d.get("default_samplerate", None)
+                        if sr is not None:
+                            dev_default_sr = int(round(float(sr)))
+                        break
+    except Exception:
+        dev_default_sr = None
+
+    fs_candidates: List[int] = []
+    for v in (fs0, dev_default_sr, 48_000, 44_100, 96_000, 88_200, 32_000, 16_000):
+        if v is None:
+            continue
+        try:
+            iv = int(v)
+        except Exception:
+            continue
+        if iv <= 0:
+            continue
+        if iv not in fs_candidates:
+            fs_candidates.append(iv)
+
+    for fs_try in fs_candidates:
         for in_ch_try in (ch0, 1, 2):
             if in_ch_try <= 0:
+                continue
+            if monitor_in_idx is not None and int(in_ch_try) <= int(monitor_in_idx):
+                # Need enough input channels to include the requested monitor channel.
                 continue
             for out_ch_try in (2, 1, int(in_ch_try)):
                 if out_ch_try <= 0:
                     continue
                 tried.append((int(fs_try), int(in_ch_try), int(out_ch_try)))
                 try:
-                    c.request(
-                        {
-                            "cmd": "session_start",
-                            "backend": backend_eff,
-                            "hostapi": engine_hostapi,
-                            "mode": "monitor_record",
-                            "sr": int(fs_try),
-                            "in_ch": int(in_ch_try),
-                            "out_ch": int(out_ch_try),
-                            "device_in": dev_in,
-                            "device_out": dev_out,
-                            "duration_s": 0,
-                            "rotate_s": 0,
-                            "path": wav_path_abs,
-                            "play_path": "",
-                            "return_audio": True,
-                            "rb_seconds": rb_send,
-                        }
-                    )
+                    req = {
+                        "cmd": "session_start",
+                        "backend": backend_eff,
+                        "hostapi": engine_hostapi,
+                        "mode": "monitor_record",
+                        "sr": int(fs_try),
+                        "in_ch": int(in_ch_try),
+                        "out_ch": int(out_ch_try),
+                        "device_in": dev_in,
+                        "device_out": dev_out,
+                        "duration_s": 0,
+                        "rotate_s": 0,
+                        "path": wav_path_abs,
+                        "play_path": "",
+                        "return_audio": True,
+                        "rb_seconds": rb_send,
+                    }
+                    if monitor_in_idx is not None:
+                        req["monitor_in_idx"] = int(monitor_in_idx)
+                    c.request(req)
                     fs = int(fs_try)
                     ch = int(in_ch_try)
                     last_err = None
@@ -2046,7 +2101,7 @@ def rec(frames=None, samplerate=None, channels=None, out=None, mapping=None, blo
     # Use device index so _rec_engine can resolve to name for the engine (device_in must be int).
     in_idx = _device_index_from_any(device_kw, "input")
     if in_idx is None:
-        def_in = int(getattr(default, "device_in", -1))
+        def_in = int(getattr(default, "device_in_override", -1))
         if def_in >= 0:
             in_idx = def_in
         else:
@@ -2326,7 +2381,6 @@ class _StreamBase:
         blocksize: int = 0,
         latency=None,
         channels=None,
-        device=None,
         callback=None,
         hostapi=None,
     ) -> None:
@@ -2342,8 +2396,6 @@ class _StreamBase:
             latency: Kept for compatibility; low-latency hint (best-effort).
             channels: Channel count. For duplex: int or (in_ch, out_ch). For input/output: int.
                 Format: int or (int, int), e.g. 2 or (1, 2).
-            device: Device selector: index, (input_index, output_index), or device name string.
-                Format: int | tuple[int,int] | str | None.
             callback: Callback with signature (indata, outdata, frames, time_info, status).
                 Format: indata (frames, in_ch) float32; outdata (frames, out_ch) float32, write in
                 callback; frames int; time_info dict; status CallbackFlags. Raise CallbackStop or
@@ -2358,7 +2410,6 @@ class _StreamBase:
         self.blocksize = int(blocksize or 1024)
         self.latency = latency
         self.channels = channels
-        self.device = device
         self.callback = callback
         self.hostapi = hostapi
 
@@ -2492,20 +2543,24 @@ class _StreamBase:
 
         dev_in = ""
         dev_out = ""
-        if self.device is not None:
-            in_idx = _device_index_from_any(self.device, "input")
-            out_idx = _device_index_from_any(self.device, "output")
-            if in_idx is None and out_idx is None and isinstance(self.device, str):
-                d = query_devices(self.device)
-                if isinstance(d, dict) and "index" in d:
-                    in_idx = int(d["index"])
-                    out_idx = int(d["index"])
-            if in_idx is not None and int(in_idx) >= 0:
-                hostapi_name, dev_in = _device_name_from_index(int(in_idx))
-            if out_idx is not None and int(out_idx) >= 0:
-                hostapi2, dev_out = _device_name_from_index(int(out_idx))
-                if hostapi2:
-                    hostapi_name = hostapi2
+        # Stream device selection is unified: always use global defaults.
+        # (Users configure `default.device` / device_in_override / device_out_override.)
+        try:
+            di_raw, do_raw = default._device_tuple_raw()
+            def_in = int(getattr(default, "device_in_override", -1))
+            def_out = int(getattr(default, "device_out_override", -1))
+            in_idx = def_in if def_in >= 0 else int(di_raw)
+            out_idx = def_out if def_out >= 0 else int(do_raw)
+        except Exception:
+            in_idx = -1
+            out_idx = -1
+
+        if int(in_idx) >= 0:
+            hostapi_name, dev_in = _device_name_from_index(int(in_idx))
+        if int(out_idx) >= 0:
+            hostapi2, dev_out = _device_name_from_index(int(out_idx))
+            if hostapi2:
+                hostapi_name = hostapi2
 
         return hostapi_name, dev_in, dev_out
 

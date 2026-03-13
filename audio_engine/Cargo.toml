@@ -18,6 +18,7 @@ base64 = "0.22"
 
 [features]
 default = []
+cpal_asio = ["cpal/asio"]
 portaudio_backend = ["portaudio"]
 
 [[bin]]
