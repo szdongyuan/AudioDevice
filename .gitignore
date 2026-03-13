@@ -49,7 +49,7 @@ audio_engine/third_party/portaudio/include/
 
 # Misc local artifacts
 audio_engine/engine_err.txt
-audio_engine/{
+# (was an invalid glob: "audio_engine/{")  # removed
 audio_engine/src/record.wav
 audio_engine/src/record.pkf
 

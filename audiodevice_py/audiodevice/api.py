@@ -1026,8 +1026,19 @@ class RecordingHandle:
         eof = bool(data["eof"])
         if frames <= 0 or ch <= 0:
             return np.zeros((0, self.channels), dtype=np.float32), eof
-        x = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32767.0
-        x = x.reshape(frames, ch)
+        # Be robust against occasional metadata/payload mismatch from the engine:
+        # compute usable frames from payload length and channel count.
+        if (len(pcm16) % 2) != 0:
+            pcm16 = pcm16[: len(pcm16) - 1]
+        s16 = np.frombuffer(pcm16, dtype=np.int16)
+        frames_payload = int(s16.size // ch) if ch > 0 else 0
+        if frames_payload <= 0:
+            return np.zeros((0, self.channels), dtype=np.float32), eof
+        usable_frames = frames_payload if frames <= 0 else min(frames_payload, frames)
+        usable_samples = int(usable_frames * ch)
+        s16 = s16[:usable_samples]
+        x = s16.astype(np.float32) / 32767.0
+        x = x.reshape(usable_frames, ch)
         return x, eof
 
     def wait(self) -> np.ndarray:
@@ -1379,8 +1390,17 @@ def _rec_engine(
     )
     if blocking:
         y = h.wait()
-        if isinstance(frames, int) and frames > 0 and y.shape[0] > int(frames):
-            y = y[: int(frames)]
+        # For int `frames`, match the requested length exactly. In practice, the engine may
+        # return +/- a few frames due to buffering/timing; pad or trim to keep `rec()` stable.
+        if isinstance(frames, int) and int(frames) > 0:
+            target = int(frames)
+            if y.ndim == 1:
+                y = y[:, None]
+            if y.shape[0] < target:
+                pad = np.zeros((target - y.shape[0], int(y.shape[1]) if y.ndim == 2 else ch), dtype=np.float32)
+                y = np.concatenate([y, pad], axis=0)
+            elif y.shape[0] > target:
+                y = y[:target]
         if save_wav and wav_path_abs:
             _write_wav_from_float32(wav_path_abs, y, fs)
         return y
@@ -1683,6 +1703,34 @@ def _device_name_from_index(idx: int) -> Tuple[str, str]:
     return hostapi_name, str(d.get("name", ""))
 
 
+def _remix_channels(y: np.ndarray, target_channels: int) -> np.ndarray:
+    """Coerce audio array to a desired channel count.
+
+    Rules:
+      - If target==1: downmix by averaging all channels.
+      - If source==1 and target>1: duplicate mono to target channels.
+      - If source>target: truncate to the first target channels.
+      - If source<target and source>1: tile channels cyclically to reach target.
+    """
+    y = np.asarray(y, dtype=np.float32)
+    if y.ndim == 1:
+        y = y[:, None]
+    t = int(target_channels)
+    if t <= 0:
+        raise ValueError("channels must be a positive int")
+    src = int(y.shape[1])
+    if src == t:
+        return y
+    if t == 1:
+        return np.mean(y, axis=1, keepdims=True).astype(np.float32, copy=False)
+    if src == 1:
+        return np.repeat(y, t, axis=1)
+    if src > t:
+        return y[:, :t]
+    reps = (t + src - 1) // src
+    return np.tile(y, (1, reps))[:, :t].astype(np.float32, copy=False)
+
+
 def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwargs) -> None:
     """Play audio data (audiodevice-compatible).
 
@@ -1699,6 +1747,8 @@ def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwar
         **kwargs: Optional compatibility args:
             - hostapi (int|str|None): Host API selector, e.g. "MME", "Windows WASAPI".
             - device (int|tuple[int,int]|None): Device index or (input_index, output_index).
+            - channels (int|None): Force output channel count (e.g. 1 or 2). If the selected
+              output device supports fewer channels, audio is automatically downmixed/truncated.
             - rb_seconds (int|None): Engine ring buffer size in seconds.
             - chunk_frames (int): Frames per write; default 4096.
 
@@ -1727,6 +1777,7 @@ def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwar
 
     hostapi_override = _hostapi_name_from_any(kwargs.pop("hostapi", None)) if "hostapi" in kwargs else ""
     device_kw = kwargs.pop("device", None) if "device" in kwargs else None
+    channels_kw = kwargs.pop("channels", None) if "channels" in kwargs else None
     rb_seconds = kwargs.pop("rb_seconds", None)
     chunk_frames = int(kwargs.pop("chunk_frames", 4096))
 
@@ -1747,6 +1798,18 @@ def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwar
             out_idx = None
     if out_idx is not None and out_idx >= 0:
         hostapi_name, dev_out_name = _device_name_from_index(int(out_idx))
+
+    if channels_kw is not None:
+        y = _remix_channels(y, int(channels_kw))
+
+    # Guard against requesting more channels than the selected output device supports.
+    if out_idx is not None and out_idx >= 0:
+        try:
+            max_out = int(query_devices(int(out_idx)).get("max_output_channels", 0) or 0)
+        except Exception:
+            max_out = 0
+        if max_out > 0 and int(y.shape[1]) > max_out:
+            y = _remix_channels(y, max_out)
 
     if not blocking:
         stop_ev = threading.Event()
@@ -1793,7 +1856,7 @@ def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwar
     )
 
 
-def rec(frames=None, samplerate=None, channels=None, dtype=None, out=None, mapping=None, blocking=False, **kwargs):
+def rec(frames=None, samplerate=None, channels=None, out=None, mapping=None, blocking=False, **kwargs):
     """Record audio (audiodevice-compatible).
 
     Args:
@@ -1803,8 +1866,6 @@ def rec(frames=None, samplerate=None, channels=None, dtype=None, out=None, mappi
             Format: int or float, e.g. 44100.
         channels: Number of input channels to record. Inferred from out or default.channels[0].
             Format: positive int, e.g. 1, 2.
-        dtype: Output array dtype; default float32 or out.dtype.
-            Format: numpy dtype, e.g. np.float32, np.int16.
         out: Pre-allocated array for recording; shape must be (frames, channels).
             Format: np.ndarray shape (frames, channels); if provided, frames can be omitted.
         mapping: 1-based input channel mapping; when given, channels=len(mapping).
@@ -1859,13 +1920,16 @@ def rec(frames=None, samplerate=None, channels=None, dtype=None, out=None, mappi
             channels = int(ch_def) if ch_def is not None else 1
     ch_i = int(channels)
 
-    dtype_eff = dtype if dtype is not None else (np.asarray(out).dtype if out is not None else np.float32)
     if out is None:
-        out_arr = np.zeros((frames_i, ch_i), dtype=dtype_eff)
+        out_arr = np.zeros((frames_i, ch_i), dtype=np.float32)
     else:
         out_arr = np.asarray(out)
+        if out_arr.dtype != np.float32:
+            raise TypeError("rec() only supports float32 output; provide out with dtype=np.float32")
         if out_arr.shape[0] != frames_i:
             raise ValueError("out has incompatible number of frames")
+        if out_arr.ndim != 2 or int(out_arr.shape[1]) != int(ch_i):
+            raise ValueError("out must have shape (frames, channels)")
 
     # Use device index so _rec_engine can resolve to name for the engine (device_in must be int).
     in_idx = _device_index_from_any(device_kw, "input")
@@ -1901,7 +1965,7 @@ def rec(frames=None, samplerate=None, channels=None, dtype=None, out=None, mappi
         def _worker() -> None:
             try:
                 y = _do_record()
-                out_arr[...] = y.astype(out_arr.dtype, copy=False)
+                out_arr[...] = y
             except Exception:
                 # match audiodevice behavior: errors surface when waiting; we have no wait()
                 pass
@@ -1920,7 +1984,7 @@ def rec(frames=None, samplerate=None, channels=None, dtype=None, out=None, mappi
         return out_arr
 
     y = _do_record()
-    out_arr[...] = y.astype(out_arr.dtype, copy=False)
+    out_arr[...] = y
     return out_arr
 
 
@@ -1928,7 +1992,6 @@ def playrec(
     data,
     samplerate=None,
     channels=None,
-    dtype=None,
     out=None,
     input_mapping=None,
     output_mapping=None,
@@ -1944,8 +2007,6 @@ def playrec(
             Format: int or float, e.g. 44100.
         channels: Number of input channels to record; default default.channels[0] or 1.
             Format: positive int.
-        dtype: Dtype for the recorded output array; default float32 or out.dtype.
-            Format: numpy dtype.
         out: Pre-allocated array for recorded audio; shape (frames, channels), frames = data rows.
             Format: np.ndarray or None.
         input_mapping: 1-based input channel mapping; when given, channels=len(input_mapping).
@@ -2007,13 +2068,16 @@ def playrec(
         channels = int(ch_def) if ch_def is not None else 1
     in_ch = int(channels)
 
-    dtype_eff = dtype if dtype is not None else (np.asarray(out).dtype if out is not None else np.float32)
     if out is None:
-        out_arr = np.zeros((frames_i, in_ch), dtype=dtype_eff)
+        out_arr = np.zeros((frames_i, in_ch), dtype=np.float32)
     else:
         out_arr = np.asarray(out)
+        if out_arr.dtype != np.float32:
+            raise TypeError("playrec() only supports float32 output; provide out with dtype=np.float32")
         if out_arr.shape[0] != frames_i:
             raise ValueError("out has incompatible number of frames")
+        if out_arr.ndim != 2 or int(out_arr.shape[1]) != int(in_ch):
+            raise ValueError("out must have shape (frames, channels)")
 
     hostapi_name = hostapi_override or str(getattr(default, "hostapi_name", "") or "MME")
     dev_in_name = ""
@@ -2065,7 +2129,7 @@ def playrec(
         def _worker() -> None:
             try:
                 x = _do_playrec()
-                out_arr[...] = x.astype(out_arr.dtype, copy=False)
+                out_arr[...] = x
             except Exception:
                 pass
             finally:
@@ -2083,7 +2147,7 @@ def playrec(
         return out_arr
 
     x = _do_playrec()
-    out_arr[...] = x.astype(out_arr.dtype, copy=False)
+    out_arr[...] = x
     return out_arr
 
 
@@ -2148,7 +2212,6 @@ class _StreamBase:
         kind: str,
         samplerate=None,
         blocksize: int = 0,
-        dtype=None,
         latency=None,
         channels=None,
         device=None,
@@ -2164,7 +2227,6 @@ class _StreamBase:
                 Format: float or None, e.g. 44100.0.
             blocksize: Frames per callback; 0 uses default (e.g. 1024).
                 Format: int.
-            dtype: Kept for compatibility; engine uses float32 internally.
             latency: Kept for compatibility; low-latency hint (best-effort).
             channels: Channel count. For duplex: int or (in_ch, out_ch). For input/output: int.
                 Format: int or (int, int), e.g. 2 or (1, 2).
@@ -2182,7 +2244,6 @@ class _StreamBase:
             default.samplerate if default.samplerate is not None else _DEFAULT_SR_FALLBACK
         )
         self.blocksize = int(blocksize or 1024)
-        self.dtype = dtype
         self.latency = latency
         self.channels = channels
         self.device = device

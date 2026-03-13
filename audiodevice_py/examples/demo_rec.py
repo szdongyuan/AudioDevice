@@ -16,12 +16,13 @@ def main() -> None:
 
     # hostapi is read-only; it follows from default.device
     ad.default.samplerate = 48_000
-    ad.default.device = [10, 12]
-    ad.default.channels = [6,2]
+    ad.default.device = (14,18)
+    ad.default.channels = (6,2)
 
-    wav_path = os.path.join(os.path.dirname(__file__), "rec7.wav")
-    y = ad.rec(10, wav_path=wav_path, save_wav=True, blocking=True)
+    wav_path = os.path.join(os.path.dirname(__file__), "rec88888.wav")
+    y = ad.rec(48000*3, blocking=True, wav_path=wav_path, save_wav=True, channels=6)
     print("recorded:", y.shape, y.dtype, "min/max:", float(y.min()), float(y.max()))
+    ad.play(y, blocking=True,samplerate=48000,channels=2)
 
 
 if __name__ == "__main__":
