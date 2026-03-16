@@ -159,11 +159,15 @@ impl Session {
         inner.maybe_auto_stop();
 
         let frames = max_frames.max(1);
-        let mut tmp = vec![0.0f32; frames * (inner.capture.channels() as usize)];
+        let ch = inner.capture.channels() as usize;
+        let mut tmp = vec![0.0f32; frames * ch];
         let got_samples = inner.capture.pop_samples(&mut tmp)?;
-        let got_frames = got_samples / (inner.capture.channels() as usize);
+        let got_frames = if ch > 0 { got_samples / ch } else { 0 };
+        let got_samples_aligned = got_frames * ch;
 
-        tmp.truncate(got_samples);
+        // Ensure protocol consistency: payload must contain whole interleaved frames.
+        // If we got a non-multiple of channel count, drop the tail samples.
+        tmp.truncate(got_samples_aligned);
         let pcm16 = convert::f32_to_pcm16_bytes_interleaved(&tmp);
         let b64 = convert::base64_encode(&pcm16);
 

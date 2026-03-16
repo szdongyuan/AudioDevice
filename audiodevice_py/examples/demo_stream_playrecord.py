@@ -27,7 +27,7 @@ FREQ = 1000.0
 VOLUME = 0.1
 OUT_CH = 2
 IN_CH = 6
-DELAY_MS = 200
+DELAY_MS = 35.2
 
 # 更稳一些（避免调度抖动导致的缓冲问题）
 ad.default.samplerate = SAMPLERATE
@@ -45,7 +45,7 @@ def main() -> None:
     if OUT_CH > 1:
         y = np.stack([y] * int(OUT_CH), axis=1)  # (frames, channels)
 
-    wav_path = Path(__file__).resolve().parent / "playrecord.wav"
+    wav_path = Path(__file__).resolve().parent / "playrecord35.2msdelay.wav"
     print(f"播放并录音 {DURATION_S:.1f}s -> {wav_path.name}")
     x = ad.playrec(
         y,

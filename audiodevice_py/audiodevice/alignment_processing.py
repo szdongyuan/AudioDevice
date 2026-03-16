@@ -4,7 +4,18 @@ Provides alignment functionality for play+record mode.
 """
 
 import numpy as np
-from base.log_manager import LogManager
+
+try:
+    from base.log_manager import LogManager  # type: ignore
+
+    def _get_logger():
+        return LogManager.set_log_handler("alignment")
+
+except Exception:  # pragma: no cover
+    import logging
+
+    def _get_logger():
+        return logging.getLogger("alignment")
 
 
 class AlignmentProcessing:
@@ -69,7 +80,7 @@ class AlignmentProcessing:
         Returns:
             np.ndarray: Aligned audio data with length equal to stimulus_signal length
         """
-        logger = LogManager.set_log_handler("alignment")
+        logger = _get_logger()
 
         # Calculate alignment offset using GCC-PHAT
         align_frames, _, _ = AlignmentProcessing.gcc_phat(stimulus_signal, recorded_signal)

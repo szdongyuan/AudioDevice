@@ -34,7 +34,8 @@ def main() -> None:
     # WASAPI is the most compatible hostapi for duplex on Windows. hostapi is read-only; set device to change it.
     ad.default.samplerate = 48_000
     ad.default.channels = 2
-    ad.default.device = (22,30)
+    ad.default.device = (14,18)
+    ad.default.channels = (6,2)
 
     fs = ad.default.samplerate
     frames = int(fs * 5)
@@ -42,8 +43,8 @@ def main() -> None:
     y = 0.1 * np.sin(2 * np.pi * 1000* t).astype(np.float32)
     y = np.stack([y, y], axis=1)  # (frames, channels)
 
-    delay_ms = 1000
-    wav_path = os.path.join(os.path.dirname(__file__), "playrecdelay1000.wav")
+    delay_ms = 34
+    wav_path = os.path.join(os.path.dirname(__file__), "playrecdelay34ms.wav")
     # On some devices/drivers, the recorded WAV may contain a small tail.
     # Save an exact-length WAV by trimming/padding to the target frame count.
     x = ad.playrec(y, save_wav=True, blocking=True, delay_time=delay_ms,wav_path=wav_path)

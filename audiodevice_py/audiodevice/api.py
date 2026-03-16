@@ -1673,6 +1673,8 @@ def _playrec_engine(
     rb_seconds: Optional[int] = None,
     chunk_frames: int = 4096,
     delay_time_ms=0,
+    alignment: bool = False,
+    alignment_channel: int = 1,
 ) -> np.ndarray:
     """Simultaneously play and record (duplex) using the engine.
 
@@ -1749,6 +1751,39 @@ def _playrec_engine(
 
     chunks = []
     try:
+        def _pcm16_to_float32_frames(pcm_bytes: bytes, got_frames: int, got_ch: int) -> np.ndarray:
+            """Best-effort decode for engine capture_read payload.
+
+            The engine may occasionally return a pcm length that doesn't match frames*channels
+            exactly; handle by truncating/padding and deriving an effective frame count.
+            """
+            if got_frames <= 0 or got_ch <= 0 or (not pcm_bytes):
+                return np.zeros((0, max(0, int(got_ch))), dtype=np.float32)
+            s16 = np.frombuffer(pcm_bytes, dtype=np.int16)
+            n = int(s16.size)
+            ch = int(got_ch)
+            if ch <= 0:
+                return np.zeros((0, 0), dtype=np.float32)
+            expected = int(got_frames) * ch
+            if expected <= 0:
+                return np.zeros((0, ch), dtype=np.float32)
+
+            if n < expected:
+                # Derive an effective frame count that fits.
+                frames_eff = n // ch
+                if frames_eff <= 0:
+                    return np.zeros((0, ch), dtype=np.float32)
+                s16 = s16[: frames_eff * ch]
+            elif n > expected:
+                s16 = s16[:expected]
+
+            x = s16.astype(np.float32) / 32767.0
+            # At this point, length is a multiple of ch.
+            frames_eff = int(x.size) // ch
+            if frames_eff <= 0:
+                return np.zeros((0, ch), dtype=np.float32)
+            return x.reshape(frames_eff, ch)
+
         # Optional pre-roll: record before starting playback.
         if delay_frames < 0 and int(in_ch) > 0:
             pre = int(-delay_frames)
@@ -1760,10 +1795,12 @@ def _playrec_engine(
                 got_frames = int(r.get("frames", 0))
                 got_ch = int(r.get("channels", 0))
                 if got_frames > 0 and got_ch > 0 and pcm:
-                    x0 = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32767.0
-                    x0 = x0.reshape(got_frames, got_ch)
+                    x0 = _pcm16_to_float32_frames(pcm, got_frames, got_ch)
+                    if x0.size <= 0:
+                        time.sleep(0.002)
+                        continue
                     chunks.append(x0)
-                    got += int(got_frames)
+                    got += int(x0.shape[0])
                 else:
                     time.sleep(0.002)
 
@@ -1794,9 +1831,9 @@ def _playrec_engine(
                 got_frames = int(r["frames"])
                 got_ch = int(r["channels"])
                 if got_frames > 0 and got_ch > 0:
-                    x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32767.0
-                    x = x.reshape(got_frames, got_ch)
-                    chunks.append(x)
+                    x = _pcm16_to_float32_frames(pcm, got_frames, got_ch)
+                    if x.size > 0:
+                        chunks.append(x)
 
         c.request({"cmd": "play_finish"})
 
@@ -1809,9 +1846,9 @@ def _playrec_engine(
                 got_ch = int(r["channels"])
                 eof = bool(r.get("eof"))
                 if got_frames > 0 and got_ch > 0:
-                    x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32767.0
-                    x = x.reshape(got_frames, got_ch)
-                    chunks.append(x)
+                    x = _pcm16_to_float32_frames(pcm, got_frames, got_ch)
+                    if x.size > 0:
+                        chunks.append(x)
                 if eof and got_frames == 0:
                     break
                 time.sleep(0.005)
@@ -1831,7 +1868,7 @@ def _playrec_engine(
     else:
         x = np.concatenate(chunks, axis=0)
 
-    # Ensure (frames, in_ch) and apply delay windowing.
+    # Ensure (frames, in_ch).
     if x.ndim == 1:
         x = x[:, None]
     if x.shape[1] != int(in_ch):
@@ -1842,12 +1879,57 @@ def _playrec_engine(
         else:
             x = x[:, : int(in_ch)]
 
-    start = int(delay_frames) if int(delay_frames) > 0 else 0
-    need = int(start) + int(frames)
-    if x.shape[0] < need:
-        pad = np.zeros((need - x.shape[0], int(in_ch)), dtype=np.float32)
-        x = np.concatenate([x, pad], axis=0)
-    x = x[start : start + int(frames)]
+    if alignment:
+        # Align recording using one selected input channel, then apply the same
+        # time shift to all input channels. This intentionally ignores delay_time windowing.
+        try:
+            from .alignment_processing import AlignmentProcessing
+
+            stim = np.asarray(y, dtype=np.float32)
+            if stim.ndim == 2 and stim.shape[1] > 1:
+                stim_mono = np.mean(stim, axis=1)
+            else:
+                stim_mono = stim.reshape(-1)
+
+            rec = np.asarray(x, dtype=np.float32)
+            if rec.ndim == 1:
+                rec = rec[:, None]
+
+            # alignment_channel is 1-based (1=CH1).
+            ci_ref = int(alignment_channel) - 1
+            if ci_ref < 0:
+                ci_ref = 0
+            if ci_ref >= int(in_ch):
+                ci_ref = int(in_ch) - 1 if int(in_ch) > 0 else 0
+            rec_ref = rec[:, ci_ref].reshape(-1)
+
+            align_frames, _, _ = AlignmentProcessing.gcc_phat(stim_mono, rec_ref)
+            start = int(align_frames)
+            if start < 0:
+                start = 0
+            end = start + int(frames)
+            if end > rec.shape[0]:
+                end = int(rec.shape[0])
+            x = rec[start:end, :]
+            if x.shape[0] < int(frames):
+                pad = np.zeros((int(frames) - x.shape[0], int(in_ch)), dtype=np.float32)
+                x = np.concatenate([x, pad], axis=0)
+        except Exception:
+            # Best-effort fallback: if alignment fails, keep old behavior.
+            start = int(delay_frames) if int(delay_frames) > 0 else 0
+            need = int(start) + int(frames)
+            if x.shape[0] < need:
+                pad = np.zeros((need - x.shape[0], int(in_ch)), dtype=np.float32)
+                x = np.concatenate([x, pad], axis=0)
+            x = x[start : start + int(frames)]
+    else:
+        # Apply delay windowing.
+        start = int(delay_frames) if int(delay_frames) > 0 else 0
+        need = int(start) + int(frames)
+        if x.shape[0] < need:
+            pad = np.zeros((need - x.shape[0], int(in_ch)), dtype=np.float32)
+            x = np.concatenate([x, pad], axis=0)
+        x = x[start : start + int(frames)]
 
     # Ensure saved WAV matches returned array length and samplerate.
     if save_wav and wav_path_abs:
@@ -2225,6 +2307,8 @@ def playrec(
     output_mapping=None,
     blocking=False,
     delay_time=0,
+    alignment: bool = False,
+    alignment_channel: int = 1,
     **kwargs,
 ):
     """Simultaneously play and record (audiodevice-compatible).
@@ -2283,6 +2367,11 @@ def playrec(
         raise TypeError(
             "playrec() does not accept hostapi; set ad.default.device to choose host API for duplex"
         )
+    # Compatibility: allow `in_channels` kwarg (documented in dist/API_USAGE.md and examples).
+    if "in_channels" in kwargs and channels is None:
+        channels = kwargs.pop("in_channels", None)
+    else:
+        _ = kwargs.pop("in_channels", None)
     device_kw = kwargs.pop("device", None) if "device" in kwargs else None
     wav_path = str(kwargs.pop("wav_path", "") or "")
     save_wav = bool(kwargs.pop("save_wav", False))
@@ -2354,6 +2443,8 @@ def playrec(
             rb_seconds=rb_seconds,
             chunk_frames=chunk_frames,
             delay_time_ms=delay_time,
+            alignment=bool(alignment),
+            alignment_channel=int(alignment_channel),
         )
         return x
 
@@ -2384,6 +2475,194 @@ def playrec(
     x = _do_playrec()
     out_arr[...] = x
     return out_arr
+
+
+def stream_playrecord(
+    data,
+    samplerate=None,
+    channels=None,
+    *,
+    blocksize: int = 1024,
+    delay_time: float = 0,
+    alignment: bool = False,
+    alignment_channel: int = 1,
+    input_mapping=None,
+    output_mapping=None,
+    wav_path: str = "",
+    save_wav: bool = False,
+):
+    """Stream-based play+record helper (blocking).
+
+    This helper uses `ad.Stream` (callback streaming) to play `data` while recording input,
+    then returns the captured audio as a single ndarray.
+
+    Args:
+        data: Audio to play. Shape (frames,) or (frames, out_channels), float32-like.
+        samplerate: Sample rate in Hz; defaults to `default.samplerate`.
+        channels: Number of input channels to record; defaults to `default.channels[0]` or 1.
+        blocksize: Callback block size (frames).
+        delay_time: Additional recording delay in milliseconds (>= 0). Implemented as a post-slice.
+        alignment: If True, align recorded audio to stimulus using GCC-PHAT (see alignment_processing).
+        input_mapping: 1-based input channel mapping; when given, channels=len(input_mapping).
+        output_mapping: 1-based output channel mapping applied to data columns.
+        wav_path: Path to save WAV when save_wav=True.
+        save_wav: Whether to save returned audio to a WAV file.
+
+    Returns:
+        np.ndarray: Recorded audio with shape (frames, channels).
+    """
+    if input_mapping is not None:
+        m = list(input_mapping) if isinstance(input_mapping, (list, tuple)) else None
+        if not m:
+            raise ValueError("input_mapping must be a non-empty sequence")
+        channels = len(m)
+
+    y_out0 = np.asarray(data, dtype=np.float32)
+    if y_out0.ndim == 1:
+        y_out0 = y_out0[:, None]
+
+    if output_mapping is not None:
+        m = list(output_mapping) if isinstance(output_mapping, (list, tuple)) else None
+        if not m:
+            raise ValueError("output_mapping must be a non-empty sequence")
+        cols = []
+        for ch in m:
+            ci = int(ch) - 1
+            if ci < 0 or ci >= int(y_out0.shape[1]):
+                raise ValueError("output_mapping channel out of range")
+            cols.append(ci)
+        y_out0 = y_out0[:, cols]
+
+    fs = int(
+        float(samplerate)
+        if samplerate is not None
+        else (
+            default.samplerate
+            if default.samplerate is not None
+            else _DEFAULT_SR_FALLBACK
+        )
+    )
+    frames_i = int(y_out0.shape[0])
+
+    if channels is None:
+        ch_def = default.channels[0]
+        channels = int(ch_def) if ch_def is not None else 1
+    in_ch = int(channels)
+
+    delay_ms = 0.0 if delay_time is None else float(delay_time)
+    if delay_ms < 0:
+        raise ValueError("delay_time must be >= 0 (milliseconds)")
+    delay_frames = int(round(delay_ms * float(fs) / 1000.0)) if fs > 0 else 0
+
+    if save_wav and not wav_path:
+        raise ValueError("save_wav=True requires wav_path")
+    wav_path_abs = os.path.abspath(wav_path) if (save_wav and wav_path) else ""
+
+    rec_chunks = []
+    out_pos = [0]
+    captured = [0]
+    # When alignment=True we need extra tail capture; otherwise the stimulus may appear
+    # late in the recording (device/output latency), causing the aligned segment to
+    # run out of data and get zero-padded.
+    extra_tail_frames = 0
+    if alignment and fs > 0:
+        extra_tail_frames = int(fs)  # 1.0s tail capture
+    target_capture = int(frames_i + max(0, delay_frames) + max(0, extra_tail_frames))
+
+    def cb(indata, outdata, frames, time_info, status):
+        # output
+        p0 = int(out_pos[0])
+        p1 = p0 + int(frames)
+        if p0 < frames_i:
+            outdata[:] = 0.0
+            outdata[: max(0, min(frames_i - p0, int(frames)))] = y_out0[p0: min(frames_i, p1)]
+        else:
+            outdata[:] = 0.0
+        out_pos[0] = p1
+
+        # input
+        if indata.size and int(indata.shape[1]) > 0:
+            rec_chunks.append(indata.copy())
+            captured[0] += int(indata.shape[0])
+
+        if captured[0] >= target_capture and out_pos[0] >= frames_i:
+            raise CallbackStop()
+
+    with Stream(
+        samplerate=int(fs),
+        channels=(int(in_ch), int(y_out0.shape[1])),
+        blocksize=int(blocksize),
+        callback=cb,
+    ):
+        # Busy-wait with sleep; Stream runs in its own worker thread.
+        # Give some extra wall-clock slack for scheduling jitter.
+        timeout_s = (float(target_capture) / float(fs) if fs > 0 else 0.0) + 2.0
+        t0 = time.time()
+        while time.time() - t0 < timeout_s:
+            if captured[0] >= target_capture and out_pos[0] >= frames_i:
+                break
+            time.sleep(0.01)
+
+    if rec_chunks:
+        rec_raw = np.concatenate(rec_chunks, axis=0)
+    else:
+        rec_raw = np.zeros((0, int(in_ch)), dtype=np.float32)
+
+    # Ensure channels.
+    if rec_raw.ndim == 1:
+        rec_raw = rec_raw[:, None]
+    if rec_raw.shape[1] != int(in_ch):
+        if rec_raw.shape[1] < int(in_ch):
+            pad_ch = np.zeros((rec_raw.shape[0], int(in_ch) - rec_raw.shape[1]), dtype=np.float32)
+            rec_raw = np.concatenate([rec_raw, pad_ch], axis=1)
+        else:
+            rec_raw = rec_raw[:, : int(in_ch)]
+
+    if alignment:
+        try:
+            from .alignment_processing import AlignmentProcessing
+
+            stim = np.asarray(y_out0, dtype=np.float32)
+            stim_mono = np.mean(stim, axis=1) if (stim.ndim == 2 and stim.shape[1] > 1) else stim.reshape(-1)
+
+            # alignment_channel is 1-based (1=CH1).
+            ci_ref = int(alignment_channel) - 1
+            if ci_ref < 0:
+                ci_ref = 0
+            if ci_ref >= int(in_ch):
+                ci_ref = int(in_ch) - 1 if int(in_ch) > 0 else 0
+            rec_ref = rec_raw[:, ci_ref].reshape(-1)
+
+            align_frames, _, _ = AlignmentProcessing.gcc_phat(stim_mono, rec_ref)
+            start = int(align_frames)
+            if start < 0:
+                start = 0
+            end = start + int(frames_i)
+            if end > rec_raw.shape[0]:
+                end = int(rec_raw.shape[0])
+            x = rec_raw[start:end, :]
+        except Exception:
+            x = rec_raw
+    else:
+        x = rec_raw
+
+    # Apply delay windowing (unless alignment already extracted exact segment).
+    if not alignment:
+        start = int(delay_frames) if int(delay_frames) > 0 else 0
+        need = int(start) + int(frames_i)
+        if x.shape[0] < need:
+            pad = np.zeros((need - x.shape[0], int(in_ch)), dtype=np.float32)
+            x = np.concatenate([x, pad], axis=0)
+        x = x[start: start + int(frames_i)]
+    else:
+        if x.shape[0] < int(frames_i):
+            pad = np.zeros((int(frames_i) - x.shape[0], int(in_ch)), dtype=np.float32)
+            x = np.concatenate([x, pad], axis=0)
+        x = x[: int(frames_i)]
+
+    if save_wav and wav_path_abs:
+        _write_wav_from_float32(wav_path_abs, x, int(fs))
+    return x.astype(np.float32, copy=False)
 
 
 def _wait_session_end(client: AudioDeviceClient, timeout_s: float) -> None:
@@ -2748,9 +3027,20 @@ class _StreamBase:
                             time.sleep(0.002)
                             continue
 
-                        x = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32767.0
-                        x = x.reshape(got_frames, got_ch)
-                        got_ch_eff = int(got_ch)
+                        s16 = np.frombuffer(pcm, dtype=np.int16)
+                        ch = int(got_ch)
+                        if ch <= 0:
+                            time.sleep(0.002)
+                            continue
+                        frames_eff = int(s16.size) // ch
+                        if frames_eff <= 0:
+                            time.sleep(0.002)
+                            continue
+                        if frames_eff != int(got_frames):
+                            got_frames = int(frames_eff)
+                        s16 = s16[: int(got_frames) * ch]
+                        x = (s16.astype(np.float32) / 32767.0).reshape(int(got_frames), ch)
+                        got_ch_eff = int(ch)
 
                         if delay_remain > 0:
                             if got_frames <= int(delay_remain):
