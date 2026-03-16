@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 current_file = Path(__file__).resolve()
-root_dir = current_file.parent.parent  # audiodevice_py/
+root_dir = current_file.parent.parent  # audiodevice_py
 
 try:
     import audiodevice as ad

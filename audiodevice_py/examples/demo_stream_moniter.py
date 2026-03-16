@@ -18,20 +18,23 @@ else:
     ad.init(timeout=10)
 ad.print_default_devices()
 
-SAMPLERATE = 48_000
+SAMPLERATE = 44100
 BLOCKSIZE = 4096
-IN_CH = 6
+IN_CH = 1
 OUT_CH = 2
-DURATION_MS = 3000
+DURATION_MS = 10000
 TARGET_FRAMES = int(round(SAMPLERATE * (DURATION_MS / 1000.0)))
 SAVE_CH = int(OUT_CH)
 # 选择要监听的输入通道（1-based）：1=CH1, 2=CH2...
-MONITOR_CH = 4
+MONITOR_CH = 1
+# 输出通道映射（1-based）：把 callback 写出的列路由到指定的设备输出通道。
+# 例如 [2] 表示把单通道监听信号送到右声道。
+OUTPUT_MAPPING = [1,2]
 
 # 对 Stream demo 更稳一些（避免调度抖动导致的缓冲问题）
-ad.default.samplerate = SAMPLERATE
-ad.default.rb_seconds = 8
-ad.default.device = (22,30)
+ad.default.samplerate = 44100
+ad.default.device = (15,17)
+ad.default.channels = (1,2)
 print(ad.default.device)
 
 
@@ -85,6 +88,7 @@ print(f"全双工直通并录音 {DURATION_MS}ms -> {out_path.name} （注意可
 stream = ad.Stream(
     callback=callback,
     channels=(IN_CH, OUT_CH),
+    output_mapping=OUTPUT_MAPPING,
     samplerate=SAMPLERATE,
     blocksize=BLOCKSIZE,
 )

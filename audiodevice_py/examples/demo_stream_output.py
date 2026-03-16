@@ -28,31 +28,29 @@ ad.default.rb_seconds = 20
 # STREAM_DEVICE = (None, int(ad.default.device_out))
 
 # 方式 B：同时指定 (输入设备index, 输出设备index)，两者必须同 hostapi
-ad.default.device = [15, 17]
+ad.default.samplerate = 44100
+ad.default.device = (15,17)
+ad.default.channels = (1,2)
 ad.print_default_devices()
 print(tuple(ad.default.device))
 
-# 尽量让采样率匹配实际输出设备，避免 WASAPI 下因格式/采样率不匹配引入的爆音/杂音
-try:
-    out_idx = int(ad.default.device[1])
-    out_dev = ad.query_devices(out_idx)
-    SAMPLERATE = int(float(out_dev.get("default_samplerate", 48_000) or 48_000))
-except Exception:
-    SAMPLERATE = 48_000
-ad.default.samplerate = SAMPLERATE
-
 # 这套 Python<->engine 的 callback 推流需要 base64 编码；blocksize 太小更容易造成欠载/杂音
 BLOCKSIZE = 8192
-print(f"Output samplerate={SAMPLERATE}, blocksize={BLOCKSIZE}, device={tuple(ad.default.device)}")
+
+# 输出通道映射（1-based）：把 callback 写出的列路由到指定的设备输出通道。
+# 例如 [2] 表示把单通道送到右声道；[2,1] 表示交换左右声道。
+OUTPUT_MAPPING = [1]
 
 # # ====================== 单通道（Mono） ======================
 def callback(indata, outdata, frames, time_info, status):
-    fs = float(SAMPLERATE)
+    fs = float(ad.default.samplerate)
     t = (phase[0] + np.arange(frames, dtype=np.float32)) / fs
     phase[0] += frames
-    outdata[:, 0] = VOLUME * np.sin(2 * np.pi * FREQ * t)
+    sig = VOLUME * np.sin(2 * np.pi * FREQ * t)
+    outdata[:, :] = sig[:, None]
 
-CHANNELS = 1
+# 注意：channels 是“设备输出通道数”，而 outdata 的列数是 len(OUTPUT_MAPPING)。
+CHANNELS = 2
 
 # # ====================== 双通道（Stereo） ======================
 # def callback(indata, outdata, frames, time_info, status):
@@ -69,7 +67,8 @@ print(f"播放正弦波 5 秒 (channels={CHANNELS})...")
 with ad.OutputStream(
     callback=callback,
     channels=CHANNELS,
-    samplerate=SAMPLERATE,
+    output_mapping=OUTPUT_MAPPING,
+    samplerate=ad.default.samplerate,
     blocksize=BLOCKSIZE,
 ):
     ad.sleep(5000)

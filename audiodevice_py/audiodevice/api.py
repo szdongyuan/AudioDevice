@@ -1181,6 +1181,7 @@ def rec_monitor(
     save_wav: bool = False,
     blocking: bool = True,
     monitor_channel: Optional[int] = None,
+    output_mapping: Optional[Iterable[int]] = None,
     samplerate: Optional[int] = None,
     channels: Optional[int] = None,
     device_in: Optional[int] = None,
@@ -1200,6 +1201,10 @@ def rec_monitor(
         monitor_channel: Which input channel to listen to during monitoring (1-based).
             - 1 means CH1 (the first input channel), 2 means CH2, etc.
             - None keeps the engine's legacy monitoring mapping behavior.
+        output_mapping: Output channel mapping for monitoring (1-based).
+            When provided (and monitor_channel is not None), the monitored input channel is routed
+            only to the selected output channels; all other output channels are silence.
+            Example: [2] routes to right channel only.
         samplerate: Target sample rate in Hz. Uses default.samplerate if None.
             Format: int or None, e.g. 44100.
         channels: Number of input channels to record. Uses default.channels[0] or 1 if None.
@@ -1234,6 +1239,25 @@ def rec_monitor(
         if mc < 1:
             raise ValueError("monitor_channel must be >= 1 (1-based), or None")
         monitor_in_idx = mc - 1
+
+    monitor_out_idxs: Optional[List[int]] = None
+    out_need_ch: Optional[int] = None
+    if output_mapping is not None:
+        if monitor_in_idx is None:
+            raise ValueError("output_mapping requires monitor_channel (choose which input to monitor)")
+        m = list(output_mapping) if isinstance(output_mapping, (list, tuple)) else list(output_mapping)
+        if not m:
+            raise ValueError("output_mapping must be a non-empty sequence (1-based)")
+        idxs: List[int] = []
+        need = 0
+        for chv in m:
+            ci = int(chv) - 1
+            if ci < 0:
+                raise ValueError("output_mapping channels must be >= 1 (1-based)")
+            idxs.append(ci)
+            need = max(need, ci + 1)
+        monitor_out_idxs = idxs
+        out_need_ch = int(need) if int(need) > 0 else None
 
     if save_wav and not wav_path:
         raise ValueError("save_wav=True requires a non-empty wav_path")
@@ -1300,7 +1324,24 @@ def rec_monitor(
             if monitor_in_idx is not None and int(in_ch_try) <= int(monitor_in_idx):
                 # Need enough input channels to include the requested monitor channel.
                 continue
-            for out_ch_try in (2, 1, int(in_ch_try)):
+            out_candidates: List[int] = []
+            if out_need_ch is not None:
+                # Must open enough output channels to reach the requested mapping.
+                for v in (out_need_ch, 2, 1, int(in_ch_try)):
+                    iv = int(v)
+                    if iv <= 0:
+                        continue
+                    if iv < int(out_need_ch):
+                        continue
+                    if iv not in out_candidates:
+                        out_candidates.append(iv)
+            else:
+                for v in (2, 1, int(in_ch_try)):
+                    iv = int(v)
+                    if iv > 0 and iv not in out_candidates:
+                        out_candidates.append(iv)
+
+            for out_ch_try in out_candidates:
                 if out_ch_try <= 0:
                     continue
                 tried.append((int(fs_try), int(in_ch_try), int(out_ch_try)))
@@ -1324,6 +1365,8 @@ def rec_monitor(
                     }
                     if monitor_in_idx is not None:
                         req["monitor_in_idx"] = int(monitor_in_idx)
+                    if monitor_out_idxs is not None:
+                        req["monitor_out_idxs"] = [int(x) for x in monitor_out_idxs]
                     c.request(req)
                     fs = int(fs_try)
                     ch = int(in_ch_try)
@@ -1734,26 +1777,88 @@ def _playrec_engine(
         except Exception:
             pass
 
-        c.request(
-            {
-                "cmd": "session_start",
-                "backend": backend_eff,
-                "hostapi": engine_hostapi,
-                "mode": "playrec",
-                "sr": fs,
-                "in_ch": int(in_ch),
-                "out_ch": int(out_ch),
-                "device_in": dev_in,
-                "device_out": dev_out,
-                # Do not use duration-based auto-stop for playrec.
-                "duration_s": 0,
-                "rotate_s": 0,
-                "path": wav_path_abs,
-                "play_path": "",
-                "return_audio": True,
-                "rb_seconds": rb_send,
-            }
-        )
+        # Some drivers reject certain sr/ch combos in duplex (e.g. 44.1k/1ch),
+        # even though other combos work. Try a small set of fallbacks.
+        max_in = 0
+        dev_in_default_sr = None
+        try:
+            di = int(device_in) if device_in is not None else int(default.device[0])
+            if di >= 0:
+                d = query_devices(int(di))
+                max_in = int(d.get("max_input_channels", 0) or 0)
+                sr = d.get("default_samplerate", None)
+                if sr is not None:
+                    dev_in_default_sr = int(round(float(sr)))
+        except Exception:
+            max_in = 0
+            dev_in_default_sr = None
+
+        fs_candidates: list[int] = []
+        for v in (fs, dev_in_default_sr, 48_000, 44_100, 96_000, 88_200, 32_000):
+            if v is None:
+                continue
+            try:
+                iv = int(v)
+            except Exception:
+                continue
+            if iv > 0 and iv not in fs_candidates:
+                fs_candidates.append(iv)
+
+        in_candidates: list[int] = []
+        for v in (in_ch, 2, 1, max_in):
+            try:
+                iv = int(v)
+            except Exception:
+                continue
+            if iv <= 0:
+                continue
+            if max_in > 0 and iv > int(max_in):
+                continue
+            if iv not in in_candidates:
+                in_candidates.append(iv)
+
+        last_err: Optional[Exception] = None
+        started = False
+        for fs_try in fs_candidates:
+            for in_try in in_candidates:
+                try:
+                    c.request(
+                        {
+                            "cmd": "session_start",
+                            "backend": backend_eff,
+                            "hostapi": engine_hostapi,
+                            "mode": "playrec",
+                            "sr": int(fs_try),
+                            "in_ch": int(in_try),
+                            "out_ch": int(out_ch),
+                            "device_in": dev_in,
+                            "device_out": dev_out,
+                            # Do not use duration-based auto-stop for playrec.
+                            "duration_s": 0,
+                            "rotate_s": 0,
+                            "path": wav_path_abs,
+                            "play_path": "",
+                            "return_audio": True,
+                            "rb_seconds": rb_send,
+                        }
+                    )
+                    fs = int(fs_try)
+                    in_ch = int(in_try)
+                    started = True
+                    last_err = None
+                    break
+                except RuntimeError as e:
+                    last_err = e
+                    msg = str(e).lower()
+                    retryable = ("no supported input config" in msg) or ("no supported output config" in msg) or ("sr/ch" in msg)
+                    if not retryable:
+                        raise
+            if started:
+                break
+        if not started:
+            if last_err is not None:
+                raise last_err
+            raise RuntimeError("failed to start playrec session")
 
         delay_ms = 0.0 if delay_time_ms is None else float(delay_time_ms)
         delay_frames = int(round(delay_ms * float(fs) / 1000.0)) if int(fs) > 0 else 0
@@ -2036,7 +2141,80 @@ def _remix_channels(y: np.ndarray, target_channels: int) -> np.ndarray:
     return np.tile(y, (1, reps))[:, :t].astype(np.float32, copy=False)
 
 
-def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwargs) -> None:
+def _parse_1based_mapping_cols(mapping, *, arg_name: str) -> list[int]:
+    """Parse a 1-based channel mapping into 0-based column indices."""
+    m = list(mapping) if isinstance(mapping, (list, tuple)) else None
+    if not m:
+        raise ValueError(f"{arg_name} must be a non-empty sequence")
+    cols: list[int] = []
+    for ch in m:
+        ci = int(ch) - 1
+        if ci < 0:
+            raise ValueError(f"{arg_name} channel must be >= 1 (1-based)")
+        cols.append(int(ci))
+    return cols
+
+
+def _select_channels_1based(data, mapping, *, arg_name: str) -> np.ndarray:
+    """Select/reorder channels from a (frames, channels) array using 1-based mapping."""
+    y = np.asarray(data, dtype=np.float32)
+    if y.ndim == 1:
+        y = y[:, None]
+    cols = _parse_1based_mapping_cols(mapping, arg_name=arg_name)
+    n_ch = int(y.shape[1]) if y.ndim >= 2 else 0
+    for ci in cols:
+        if ci >= n_ch:
+            raise ValueError(f"{arg_name} channel out of range")
+    return y[:, cols]
+
+
+def _route_channels_1based(data, mapping, *, arg_name: str) -> np.ndarray:
+    """Route data columns into target channels using a 1-based mapping.
+
+    Semantics (like sounddevice/audiodevice output mapping):
+    - mapping specifies the *target* output channel numbers (1-based).
+    - The input data must have exactly len(mapping) channels; column j routes to mapping[j].
+    - The returned array has channel count max(mapping) (missing channels are filled with zeros).
+    - Duplicate entries in mapping are allowed; routed channels are summed.
+    """
+    y = np.asarray(data, dtype=np.float32)
+    if y.ndim == 1:
+        y = y[:, None]
+    cols = _parse_1based_mapping_cols(mapping, arg_name=arg_name)
+    if int(y.shape[1]) != int(len(cols)):
+        raise ValueError(f"data channels must equal len({arg_name})")
+    out_ch = int(max(cols) + 1) if cols else int(y.shape[1])
+    y2 = np.zeros((int(y.shape[0]), out_ch), dtype=np.float32)
+    for j, ci in enumerate(cols):
+        y2[:, ci] += y[:, j]
+    return y2
+
+
+def _pad_channels_zeros(y: np.ndarray, target_channels: int) -> np.ndarray:
+    """Pad (frames, channels) with trailing zero channels up to target_channels."""
+    y = np.asarray(y, dtype=np.float32)
+    if y.ndim == 1:
+        y = y[:, None]
+    t = int(target_channels)
+    if t <= 0:
+        raise ValueError("channels must be a positive int")
+    ch = int(y.shape[1])
+    if ch >= t:
+        return y
+    pad = np.zeros((int(y.shape[0]), int(t - ch)), dtype=np.float32)
+    return np.concatenate([y, pad], axis=1)
+
+
+def play(
+    data,
+    samplerate=None,
+    mapping=None,
+    blocking=False,
+    loop=False,
+    *,
+    output_mapping=None,
+    **kwargs,
+) -> None:
     """Play audio data (audiodevice-compatible).
 
     Args:
@@ -2044,8 +2222,9 @@ def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwar
             converted to float32 internally; each column is one channel.
         samplerate: Sample rate in Hz. Uses default.samplerate if None.
             Format: int or float, e.g. 44100, 48000.
-        mapping: 1-based channel mapping to select/reorder output channels from data columns.
+        mapping: 1-based output channel mapping to route data columns into device channels.
             Format: non-empty sequence of 1-based channel indices, e.g. [1, 2] or [2, 1].
+        output_mapping: Preferred alias for `mapping` (added for consistency with playrec/stream_playrecord).
         blocking: If True, block until playback finishes. If False, start playback in a
             background thread and return immediately.
         loop: Whether to loop (not supported; kept for API compatibility).
@@ -2058,24 +2237,16 @@ def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwar
 
     Raises:
         NotImplementedError: If `loop=True`.
-        ValueError: If `mapping` is invalid.
+        ValueError: If `mapping`/`output_mapping` is invalid.
         RuntimeError: If playback fails in the engine.
     """
-    if mapping is not None:
-        # Minimal mapping: reorder/select output channels from data columns (1-based like audiodevice).
-        m = list(mapping) if isinstance(mapping, (list, tuple)) else None
-        if not m:
-            raise ValueError("mapping must be a non-empty sequence")
-        y0 = np.asarray(data, dtype=np.float32)
-        if y0.ndim == 1:
-            y0 = y0[:, None]
-        cols = []
-        for ch in m:
-            ci = int(ch) - 1
-            if ci < 0 or ci >= int(y0.shape[1]):
-                raise ValueError("mapping channel out of range")
-            cols.append(ci)
-        data = y0[:, cols]
+    global _GLOBAL_SESSION_THREAD, _GLOBAL_SESSION_STOP, _GLOBAL_SESSION_DONE, _GLOBAL_SESSION_ERROR, _GLOBAL_STREAM
+
+    if output_mapping is None:
+        output_mapping = mapping
+    elif mapping is not None and list(mapping) != list(output_mapping):
+        raise TypeError("Provide only one of mapping or output_mapping")
+
     if loop:
         raise NotImplementedError("loop is not supported in audiodevice.play()")
 
@@ -2090,9 +2261,12 @@ def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwar
 
     fs = float(samplerate) if samplerate is not None else (default.samplerate if default.samplerate is not None else _DEFAULT_SR_FALLBACK)
 
-    y = np.asarray(data, dtype=np.float32)
-    if y.ndim == 1:
-        y = y[:, None]
+    if output_mapping is not None:
+        y = _route_channels_1based(data, output_mapping, arg_name="output_mapping")
+    else:
+        y = np.asarray(data, dtype=np.float32)
+        if y.ndim == 1:
+            y = y[:, None]
 
     dev_out_name = ""
     hostapi_name = str(getattr(default, "hostapi_name", "") or "MME")
@@ -2106,17 +2280,142 @@ def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwar
     if out_idx is not None and out_idx >= 0:
         hostapi_name, dev_out_name = _device_name_from_index(int(out_idx))
 
+    # Prefer explicit channels kwarg, otherwise honor default output channels when set.
+    out_ch_hint = None
     if channels_kw is not None:
-        y = _remix_channels(y, int(channels_kw))
+        out_ch_hint = int(channels_kw)
+    else:
+        try:
+            out_ch_def = default.channels.output
+            out_ch_hint = None if out_ch_def is None else int(out_ch_def)
+        except Exception:
+            out_ch_hint = None
+
+    # If user didn't specify a channel count but did specify output_mapping, try to pick a
+    # compatible open-channel count for common devices where 1ch may be unsupported but 2ch is.
+    if output_mapping is not None and out_ch_hint is None:
+        want = int(y.shape[1])
+        max_out = 0
+        if out_idx is not None and out_idx >= 0:
+            try:
+                max_out = int(query_devices(int(out_idx)).get("max_output_channels", 0) or 0)
+            except Exception:
+                max_out = 0
+        if max_out > 0:
+            out_ch_hint = min(max_out, max(want, 2 if max_out >= 2 else 1))
+        else:
+            out_ch_hint = max(want, 2)
+
+    if out_ch_hint is not None and out_ch_hint > 0:
+        if output_mapping is not None:
+            # If user routes into a subset of channels (e.g. [1]), still open the device with
+            # the configured output channel count (often 2 on Windows), padding silence.
+            if int(y.shape[1]) > int(out_ch_hint):
+                raise ValueError(f"channels ({out_ch_hint}) must be >= max(output_mapping) ({int(y.shape[1])})")
+            y = _pad_channels_zeros(y, int(out_ch_hint))
+        else:
+            y = _remix_channels(y, int(out_ch_hint))
 
     # Guard against requesting more channels than the selected output device supports.
+    max_out = 0
     if out_idx is not None and out_idx >= 0:
         try:
             max_out = int(query_devices(int(out_idx)).get("max_output_channels", 0) or 0)
         except Exception:
             max_out = 0
         if max_out > 0 and int(y.shape[1]) > max_out:
+            if output_mapping is not None:
+                raise ValueError(
+                    f"output_mapping requires {int(y.shape[1])} output channels, but device supports {int(max_out)}"
+                )
             y = _remix_channels(y, max_out)
+
+    # Some Windows drivers reject certain channel counts (e.g. 1ch) even though others (e.g. 2ch) work.
+    # When output_mapping is used, we can safely try alternative open-channel counts by padding silence,
+    # without changing the routing semantics.
+    y_base = y
+    if output_mapping is not None:
+        required = int(y_base.shape[1])
+        # Build candidate out_ch counts (>= required).
+        cands: list[int] = []
+        if out_ch_hint is not None:
+            cands.append(int(out_ch_hint))
+        # Prefer 2ch for mono mappings when possible.
+        if required == 1:
+            cands.append(2)
+            cands.append(1)
+        cands.append(required)
+        if int(max_out) > 0:
+            cands.append(int(max_out))
+            # Common multichannel layouts (keep within device capability).
+            for v in (2, 4, 6, 8, 12, 16):
+                if int(v) <= int(max_out):
+                    cands.append(int(v))
+        # Normalize: unique, >= required, <= max_out (when known), stable order.
+        seen = set()
+        cands2: list[int] = []
+        for v in cands:
+            vv = int(v)
+            if vv < required:
+                continue
+            if int(max_out) > 0 and vv > int(max_out):
+                continue
+            if vv not in seen:
+                seen.add(vv)
+                cands2.append(vv)
+        # Ensure we don't accidentally try to open fewer channels than required routing.
+        def _y_for_out_ch(out_ch: int) -> np.ndarray:
+            return _pad_channels_zeros(y_base, int(out_ch)) if int(out_ch) > required else y_base
+
+        def _play_try() -> None:
+            last = None
+            for out_ch in cands2:
+                try:
+                    _play_engine(
+                        _y_for_out_ch(int(out_ch)),
+                        blocking=True,
+                        samplerate=int(fs),
+                        hostapi=hostapi_name,
+                        device_out=dev_out_name,
+                        rb_seconds=rb_seconds,
+                        chunk_frames=chunk_frames,
+                    )
+                    return
+                except RuntimeError as e:
+                    last = e
+                    msg = str(e).lower()
+                    # Only retry on config-related errors; otherwise surface immediately.
+                    if ("no supported output config" not in msg) and ("sr/ch" not in msg):
+                        raise
+            if last is not None:
+                raise last
+
+        if not blocking:
+            stop_ev = threading.Event()
+            done_ev = threading.Event()
+
+            def _worker() -> None:
+                global _GLOBAL_SESSION_ERROR
+                try:
+                    _play_try()
+                except BaseException as e:
+                    with _GLOBAL_SESSION_LOCK:
+                        _GLOBAL_SESSION_ERROR = e
+                finally:
+                    done_ev.set()
+
+            t = threading.Thread(target=_worker, daemon=True)
+            with _GLOBAL_SESSION_LOCK:
+                _GLOBAL_SESSION_THREAD = t
+                _GLOBAL_SESSION_STOP = stop_ev
+                _GLOBAL_SESSION_DONE = done_ev
+                _GLOBAL_SESSION_ERROR = None
+                _GLOBAL_STREAM = None
+            t.start()
+            return
+
+        _play_try()
+        return
 
     if not blocking:
         stop_ev = threading.Event()
@@ -2143,7 +2442,6 @@ def play(data, samplerate=None, mapping=None, blocking=False, loop=False, **kwar
 
         t = threading.Thread(target=_worker, daemon=True)
         with _GLOBAL_SESSION_LOCK:
-            global _GLOBAL_SESSION_THREAD, _GLOBAL_SESSION_STOP, _GLOBAL_SESSION_DONE, _GLOBAL_SESSION_ERROR, _GLOBAL_STREAM
             _GLOBAL_SESSION_THREAD = t
             _GLOBAL_SESSION_STOP = stop_ev
             _GLOBAL_SESSION_DONE = done_ev
@@ -2365,7 +2663,7 @@ def playrec(
             Format: np.ndarray or None.
         input_mapping: 1-based input channel mapping; when given, channels=len(input_mapping).
             Format: non-empty sequence, e.g. [1, 2].
-        output_mapping: 1-based output channel mapping applied to data columns.
+        output_mapping: 1-based output channel mapping to route data columns into device channels.
             Format: non-empty sequence, e.g. [1, 2] or [2, 1].
         blocking: If True, run synchronously and return recorded array. If False, run in background
             and return immediately.
@@ -2396,20 +2694,32 @@ def playrec(
                 raise ValueError("input_mapping channel must be >= 1 (1-based)")
             cols.append(ci)
         in_map_cols = cols
+    y_out = np.asarray(data, dtype=np.float32)
+    if y_out.ndim == 1:
+        y_out = y_out[:, None]
     if output_mapping is not None:
-        m = list(output_mapping) if isinstance(output_mapping, (list, tuple)) else None
-        if not m:
-            raise ValueError("output_mapping must be a non-empty sequence")
-        y_out0 = np.asarray(data, dtype=np.float32)
-        if y_out0.ndim == 1:
-            y_out0 = y_out0[:, None]
-        cols = []
-        for ch in m:
-            ci = int(ch) - 1
-            if ci < 0 or ci >= int(y_out0.shape[1]):
-                raise ValueError("output_mapping channel out of range")
-            cols.append(ci)
-        data = y_out0[:, cols]
+        y_out = _route_channels_1based(y_out, output_mapping, arg_name="output_mapping")
+        # If default output channels are set, pad with silence so duplex opens with that count.
+        # Otherwise, best-effort pad to 2 when the output device supports >=2 (some drivers reject 1ch).
+        try:
+            out_ch_def = default.channels.output
+            out_ch_pad = None if out_ch_def is None else int(out_ch_def)
+        except Exception:
+            out_ch_pad = None
+        if out_ch_pad is None:
+            max_out0 = 0
+            try:
+                dk = kwargs.get("device", None)
+                out_idx0 = _device_index_from_any(dk, "output")
+                if out_idx0 is None:
+                    out_idx0 = int(default.device[1])
+                if out_idx0 is not None and int(out_idx0) >= 0:
+                    max_out0 = int(query_devices(int(out_idx0)).get("max_output_channels", 0) or 0)
+            except Exception:
+                max_out0 = 0
+            out_ch_pad = 2 if int(max_out0) >= 2 else None
+        if out_ch_pad is not None and int(out_ch_pad) > 0 and int(y_out.shape[1]) <= int(out_ch_pad):
+            y_out = _pad_channels_zeros(y_out, int(out_ch_pad))
 
     if "hostapi" in kwargs:
         raise TypeError(
@@ -2432,9 +2742,7 @@ def playrec(
 
     fs = float(samplerate) if samplerate is not None else (default.samplerate if default.samplerate is not None else _DEFAULT_SR_FALLBACK)
 
-    y_out = np.asarray(data, dtype=np.float32)
-    if y_out.ndim == 1:
-        y_out = y_out[:, None]
+    # y_out already normalized to float32 (frames, channels) above, and output_mapping already applied.
     frames_i = int(y_out.shape[0])
 
     if channels is None:
@@ -2484,6 +2792,15 @@ def playrec(
         else:
             hostapi_name = hostapi2 or hostapi_name
 
+        try:
+            max_out = int(query_devices(int(out_idx)).get("max_output_channels", 0) or 0)
+        except Exception:
+            max_out = 0
+        if max_out > 0 and int(y_out.shape[1]) > max_out:
+            raise ValueError(
+                f"output_mapping requires {int(y_out.shape[1])} output channels, but device supports {int(max_out)}"
+            )
+
     def _do_playrec() -> np.ndarray:
         x_full = _playrec_engine(
             y_out,
@@ -2493,8 +2810,8 @@ def playrec(
             samplerate=int(fs),
             in_channels=int(in_ch_capture),
             hostapi=hostapi_name,
-            device_in=dev_in_name,
-            device_out=dev_out_name,
+            device_in=in_idx if (in_idx is not None and int(in_idx) >= 0) else None,
+            device_out=out_idx if (out_idx is not None and int(out_idx) >= 0) else None,
             rb_seconds=rb_seconds,
             chunk_frames=chunk_frames,
             delay_time_ms=delay_time,
@@ -2582,7 +2899,7 @@ def stream_playrecord(
             without delay/alignment windowing. This is useful for debugging latency and truncation.
         alignment: If True, align recorded audio to stimulus using GCC-PHAT (see alignment_processing).
         input_mapping: 1-based input channel mapping; when given, channels=len(input_mapping).
-        output_mapping: 1-based output channel mapping applied to data columns.
+        output_mapping: 1-based output channel mapping to route data columns into device channels.
         wav_path: Path to save WAV when save_wav=True.
         save_wav: Whether to save returned audio to a WAV file.
 
@@ -2607,16 +2924,47 @@ def stream_playrecord(
         y_out0 = y_out0[:, None]
 
     if output_mapping is not None:
-        m = list(output_mapping) if isinstance(output_mapping, (list, tuple)) else None
-        if not m:
-            raise ValueError("output_mapping must be a non-empty sequence")
-        cols = []
-        for ch in m:
-            ci = int(ch) - 1
-            if ci < 0 or ci >= int(y_out0.shape[1]):
-                raise ValueError("output_mapping channel out of range")
-            cols.append(ci)
-        y_out0 = y_out0[:, cols]
+        y_out0 = _route_channels_1based(y_out0, output_mapping, arg_name="output_mapping")
+        # If default output channels are set, pad with silence so engine can open that config.
+        # Otherwise, best-effort pad to 2 when the output device supports >=2 (some drivers reject 1ch).
+        out_ch_pad = None
+        try:
+            out_ch_def = default.channels.output
+            out_ch_pad = None if out_ch_def is None else int(out_ch_def)
+        except Exception:
+            out_ch_pad = None
+        if out_ch_pad is None:
+            out_idx = None
+            try:
+                def_out = int(getattr(default, "device_out_override", -1))
+                out_idx = def_out if def_out >= 0 else int(default.device[1])
+            except Exception:
+                out_idx = None
+            if out_idx is not None and int(out_idx) >= 0:
+                try:
+                    max_out = int(query_devices(int(out_idx)).get("max_output_channels", 0) or 0)
+                except Exception:
+                    max_out = 0
+                out_ch_pad = 2 if int(max_out) >= 2 else None
+        if out_ch_pad is not None and int(out_ch_pad) > 0 and int(y_out0.shape[1]) <= int(out_ch_pad):
+            y_out0 = _pad_channels_zeros(y_out0, int(out_ch_pad))
+
+        # Best-effort: validate against default output device capability (if resolvable).
+        out_idx = None
+        try:
+            def_out = int(getattr(default, "device_out_override", -1))
+            out_idx = def_out if def_out >= 0 else int(default.device[1])
+        except Exception:
+            out_idx = None
+        if out_idx is not None and int(out_idx) >= 0:
+            try:
+                max_out = int(query_devices(int(out_idx)).get("max_output_channels", 0) or 0)
+            except Exception:
+                max_out = 0
+            if max_out > 0 and int(y_out0.shape[1]) > max_out:
+                raise ValueError(
+                    f"output_mapping requires {int(y_out0.shape[1])} output channels, but device supports {int(max_out)}"
+                )
 
     fs = int(
         float(samplerate)
@@ -2796,6 +3144,7 @@ class _StreamBase:
         latency=None,
         channels=None,
         mapping=None,
+        output_mapping=None,
         callback=None,
         delay_time=0,
     ) -> None:
@@ -2815,6 +3164,10 @@ class _StreamBase:
                 engine still captures `channels` input channels, but the callback receives only
                 the selected/reordered channels with shape (frames, len(mapping)).
                 Requires: channels >= max(mapping). Format: non-empty sequence, e.g. [1] or [2, 1].
+            output_mapping: 1-based output channel mapping (OutputStream/Stream only). If provided,
+                the engine plays `channels` output channels, but the callback receives only
+                shape (frames, len(output_mapping)); those columns are routed into the selected
+                device output channels. Requires: channels >= max(output_mapping).
             callback: Callback with signature (indata, outdata, frames, time_info, status).
                 Format: indata (frames, in_ch) float32; outdata (frames, out_ch) float32, write in
                 callback; frames int; time_info dict; status CallbackFlags. Raise CallbackStop or
@@ -2831,16 +3184,10 @@ class _StreamBase:
         self.channels = channels
         self._mapping_cols = None
         if mapping is not None:
-            m = list(mapping) if isinstance(mapping, (list, tuple)) else None
-            if not m:
-                raise ValueError("mapping must be a non-empty sequence")
-            cols = []
-            for ch in m:
-                ci = int(ch) - 1
-                if ci < 0:
-                    raise ValueError("mapping channel must be >= 1 (1-based)")
-                cols.append(ci)
-            self._mapping_cols = cols
+            self._mapping_cols = _parse_1based_mapping_cols(mapping, arg_name="mapping")
+        self._output_mapping_cols = None
+        if output_mapping is not None:
+            self._output_mapping_cols = _parse_1based_mapping_cols(output_mapping, arg_name="output_mapping")
         self.callback = callback
         self.delay_time = 0.0 if delay_time is None else float(delay_time)
 
@@ -3042,6 +3389,16 @@ class _StreamBase:
             mapping_cols = None
             in_ch_cb = int(in_ch_capture)
 
+        out_map_cols = self._output_mapping_cols
+        if out_map_cols is not None and int(out_ch) > 0:
+            need_ch = int(max(out_map_cols) + 1)
+            if int(out_ch) < int(need_ch):
+                raise ValueError(f"channels ({out_ch}) must be >= max(output_mapping) ({need_ch})")
+            out_ch_cb = int(len(out_map_cols))
+        else:
+            out_map_cols = None
+            out_ch_cb = int(out_ch)
+
         c = AudioDeviceClient(default.host, default.port, timeout=float(default.timeout))
         self._client = c
         try:
@@ -3163,7 +3520,7 @@ class _StreamBase:
                         filled += take
 
                 indata = indata_cap[:, mapping_cols] if mapping_cols is not None else indata_cap
-                outdata = np.zeros((frames, out_ch), dtype=np.float32)
+                outdata = np.zeros((frames, out_ch_cb), dtype=np.float32)
                 tnow = time.time()
                 time_info = {
                     "inputBufferAdcTime": tnow,
@@ -3216,11 +3573,18 @@ class _StreamBase:
 
                 # Write output
                 if out_ch > 0:
+                    if out_map_cols is not None:
+                        outdata_cap = np.zeros((frames, out_ch), dtype=np.float32)
+                        for j, ci in enumerate(out_map_cols):
+                            outdata_cap[:, ci] += outdata[:, j]
+                        out_send = outdata_cap
+                    else:
+                        out_send = outdata
                     off = 0
                     # Engine may accept partial frames when its output buffer is full.
                     # Never drop frames silently: retry until the whole block is accepted.
                     while off < frames and not self._stop.is_set():
-                        sub = outdata[off:]
+                        sub = out_send[off:]
                         pcm16 = np.clip(sub, -1.0, 1.0)
                         pcm16 = (pcm16 * 32767.0).astype(np.int16)
                         b64 = base64.b64encode(pcm16.tobytes()).decode("ascii")
@@ -3328,14 +3692,36 @@ class InputStream(_StreamBase):
 
 class OutputStream(_StreamBase):
     """Output-only callback stream."""
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(
+        self,
+        *,
+        samplerate=None,
+        blocksize: int = 0,
+        latency=None,
+        channels=None,
+        output_mapping=None,
+        callback=None,
+    ) -> None:
         """Create an output stream.
 
         Args:
-            *args: Forwarded to `_StreamBase`.
-            **kwargs: Forwarded to `_StreamBase` (notably `callback`, `samplerate`, `channels`).
+            samplerate: Sample rate in Hz. Uses default.samplerate if None.
+            blocksize: Frames per callback; 0 uses default.
+            latency: Compatibility arg.
+            channels: Output channel count played by the device.
+            output_mapping: 1-based output channel mapping applied after callback. Requires
+                channels >= max(output_mapping). Callback outdata has shape (frames, len(output_mapping)).
+            callback: Callback signature (indata, outdata, frames, time_info, status).
         """
-        super().__init__(kind="output", *args, **kwargs)
+        super().__init__(
+            kind="output",
+            samplerate=samplerate,
+            blocksize=blocksize,
+            latency=latency,
+            channels=channels,
+            output_mapping=output_mapping,
+            callback=callback,
+        )
 
 
 @dataclass

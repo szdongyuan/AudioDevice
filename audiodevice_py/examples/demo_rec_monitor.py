@@ -29,12 +29,13 @@ def main() -> None:
     wav_path = os.path.join(os.path.dirname(__file__), "rec_monitor.wav")
     # 选择要监听的输入通道（1-based）：1=CH1, 2=CH2...
     # 多通道声卡常见场景：你可能只想听某一路输入，而不是总听 CH1。
-    MONITOR_CH = 2
+    MONITOR_CH = 1
+    OUTPUT_MAPPING = [1,3]  # 1-based：例如把监听信号送到右声道（仅该声道有声）
 
     # Same style as demo_rec.py. device_in / device_out accept only int. hostapi is read-only (follows from device_in/device_out).
-    ad.default.samplerate = 48_000
-    ad.default.channels = (6,2)
-    ad.default.device = (22,30)
+    ad.default.samplerate = 44100
+    ad.default.channels = (1,2)
+    ad.default.device = (15, 17)   
     IN_CH = int(ad.default.channels.input or 1)
 
     print("hostapi:", ad.default.hostapi)
@@ -48,11 +49,11 @@ def main() -> None:
         wav_path=wav_path,
         blocking=True,
         monitor_channel=MONITOR_CH,
-        samplerate=48_000,
+        output_mapping=OUTPUT_MAPPING,
+        samplerate=44100,
         channels=IN_CH,
     )
     print("captured:", x.shape, x.dtype, "wav:", wav_path)
-
 
 if __name__ == "__main__":
     main()

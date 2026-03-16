@@ -52,6 +52,15 @@ pub struct SessionParams {
     #[serde(default)]
     pub monitor_in_idx: Option<u16>,
 
+    /// Optional output channel indices (0-based) to receive the monitored signal in
+    /// monitor_record mode (effective when monitor_in_idx is set).
+    ///
+    /// - When set: the selected input channel is copied to these output channels
+    ///   (other output channels are silence).
+    /// - When None: monitor_in_idx duplicates to all output channels (legacy behavior).
+    #[serde(default)]
+    pub monitor_out_idxs: Option<Vec<u16>>,
+
     #[serde(default)]
     pub device_in: String,
     #[serde(default)]

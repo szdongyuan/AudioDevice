@@ -34,31 +34,24 @@ def main() -> None:
     # Note: CPAL+ASIO works well for input-only (rec) or output-only (play),
     # but full-duplex playrec may produce zero input frames on some ASIO drivers.
     # WASAPI is the most compatible hostapi for duplex on Windows. hostapi is read-only; set device to change it.
-    ad.default.samplerate = 48_000
-    ad.default.device = (14,18)
-    ad.default.channels = (6,2)
-
+    ad.default.samplerate = 44100
+    ad.default.device = (15,17)
+    ad.default.channels = (1,2)
+ 
     fs = ad.default.samplerate
     frames = int(fs * 5)
     t = np.arange(frames, dtype=np.float32) / fs
-    y = 0.1 * np.sin(2 * np.pi * 1000* t).astype(np.float32)
-    y = np.stack([y, y], axis=1)  # (frames, channels)
-
-    import matplotlib.pyplot as plt
-
-# ---- plot time-domain waveform of y ----
-    plt.figure(figsize=(10,4))
-    plt.plot(t, y[:,0])
-    plt.xlabel("Time (s)")
-    plt.ylabel("Amplitude")
-    plt.title("Playback Signal (1 kHz Sine)")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
+    # 输出通道映射（1-based）：把 y 的每一列路由到指定的设备输出通道（可用于交换左右声道等）。
+    output_mapping = [1,2]
+    n_out = int(len(output_mapping))
+    freqs = 1000.0 + 200.0 * np.arange(n_out, dtype=np.float32)
+    y = 0.1 * np.sin(2 * np.pi * t[:, None] * freqs[None, :]).astype(np.float32)
+    if n_out == 1:
+        y = y[:, 0]
 
     delay_ms = 34
     wav_path = os.path.join(os.path.dirname(__file__), "playrecdelay34ms.wav")
-    input_mapping = [1,2,3,4,5,6]  # 1-based: only keep CH1 in returned recording
+    input_mapping = [1]  # 1-based: only keep CH1 in returned recording
     # On some devices/drivers, the recorded WAV may contain a small tail.
     # Save an exact-length WAV by trimming/padding to the target frame count.
     x = ad.playrec(
@@ -68,6 +61,7 @@ def main() -> None:
         delay_time=delay_ms,
         wav_path=wav_path,
         input_mapping=input_mapping,
+        output_mapping=output_mapping,
     )
     x = np.asarray(x)
     if x.shape[0] < frames:

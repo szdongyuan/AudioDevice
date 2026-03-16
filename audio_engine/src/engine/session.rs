@@ -330,6 +330,25 @@ impl SessionInner {
             let in_ch_usize = in_cfg.channels as usize;
             let out_ch_usize = out_cfg.channels as usize;
             let monitor_in_idx_opt = self.params.monitor_in_idx.map(|x| x as usize);
+            let monitor_out_idxs_opt: Option<Vec<usize>> = match &self.params.monitor_out_idxs {
+                Some(v) => {
+                    if out_ch_usize == 0 {
+                        return Err(anyhow!("monitor_out_idxs requires out_ch > 0"));
+                    }
+                    let mut out: Vec<usize> = Vec::with_capacity(v.len());
+                    for &x in v.iter() {
+                        let xi = x as usize;
+                        if xi >= out_ch_usize {
+                            return Err(anyhow!(
+                                "monitor_out_idxs contains {xi} but out_ch is {out_ch_usize}"
+                            ));
+                        }
+                        out.push(xi);
+                    }
+                    if out.is_empty() { None } else { Some(out) }
+                }
+                None => None,
+            };
             let mut monitor_tmp: Vec<f32> = Vec::new();
             let need_wav_recorder = !self.params.path.is_empty();
 
@@ -397,12 +416,28 @@ impl SessionInner {
                         };
                         monitor_tmp.clear();
                         monitor_tmp.reserve(frames * out_ch_usize);
-                        for f in 0..frames {
-                            let base = f * in_ch_usize;
-                            let frame_in = &data[base..base + in_ch_usize];
-                            let v = frame_in[mi];
-                            for _ in 0..out_ch_usize {
-                                monitor_tmp.push(v);
+                        if let Some(ref out_idxs) = monitor_out_idxs_opt {
+                            for f in 0..frames {
+                                let base = f * in_ch_usize;
+                                let frame_in = &data[base..base + in_ch_usize];
+                                let v = frame_in[mi];
+                                // Start with silence, then set selected outputs to v.
+                                let off = monitor_tmp.len();
+                                for _ in 0..out_ch_usize {
+                                    monitor_tmp.push(0.0);
+                                }
+                                for &oc in out_idxs.iter() {
+                                    monitor_tmp[off + oc] = v;
+                                }
+                            }
+                        } else {
+                            for f in 0..frames {
+                                let base = f * in_ch_usize;
+                                let frame_in = &data[base..base + in_ch_usize];
+                                let v = frame_in[mi];
+                                for _ in 0..out_ch_usize {
+                                    monitor_tmp.push(v);
+                                }
                             }
                         }
                         let _ = bus_out_for_monitor
