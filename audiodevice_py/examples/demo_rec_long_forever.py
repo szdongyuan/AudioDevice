@@ -61,9 +61,12 @@ def main() -> None:
     start_dt = datetime.now()
     start_ts = start_dt.strftime("%Y%m%d_%H%M%S")
     wav_path = str(out_dir / f"{start_ts}.wav")
+    ad.default.samplerate = 48_000
+    ad.default.device = (14,18)
+    ad.default.channels = (6,2)
 
     try:
-        h = ad.rec_long(wav_path, rotate_s=rotate_s)
+        h = ad.rec_long(wav_path, rotate_s=rotate_s, mapping=[1])
         print(
             "started:",
             "hostapi=",

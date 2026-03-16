@@ -1675,6 +1675,7 @@ def _playrec_engine(
     delay_time_ms=0,
     alignment: bool = False,
     alignment_channel: int = 1,
+    return_full: bool = False,
 ) -> np.ndarray:
     """Simultaneously play and record (duplex) using the engine.
 
@@ -1725,32 +1726,40 @@ def _playrec_engine(
     backend_eff, engine_hostapi, _ = _hostapi_display_to_engine(hostapi_eff)
 
     c = AudioDeviceClient(default.host, default.port, timeout=default.timeout)
-    c.request(
-        {
-            "cmd": "session_start",
-            "backend": backend_eff,
-            "hostapi": engine_hostapi,
-            "mode": "playrec",
-            "sr": fs,
-            "in_ch": int(in_ch),
-            "out_ch": int(out_ch),
-            "device_in": dev_in,
-            "device_out": dev_out,
-            # Do not use duration-based auto-stop for playrec.
-            "duration_s": 0,
-            "rotate_s": 0,
-            "path": wav_path_abs,
-            "play_path": "",
-            "return_audio": True,
-            "rb_seconds": rb_send,
-        }
-    )
-
-    delay_ms = 0.0 if delay_time_ms is None else float(delay_time_ms)
-    delay_frames = int(round(delay_ms * float(fs) / 1000.0)) if int(fs) > 0 else 0
-
-    chunks = []
     try:
+        # Best-effort: if a previous session is still active (e.g. a crash),
+        # stop it so session_start doesn't fail.
+        try:
+            c.request({"cmd": "session_stop"})
+        except Exception:
+            pass
+
+        c.request(
+            {
+                "cmd": "session_start",
+                "backend": backend_eff,
+                "hostapi": engine_hostapi,
+                "mode": "playrec",
+                "sr": fs,
+                "in_ch": int(in_ch),
+                "out_ch": int(out_ch),
+                "device_in": dev_in,
+                "device_out": dev_out,
+                # Do not use duration-based auto-stop for playrec.
+                "duration_s": 0,
+                "rotate_s": 0,
+                "path": wav_path_abs,
+                "play_path": "",
+                "return_audio": True,
+                "rb_seconds": rb_send,
+            }
+        )
+
+        delay_ms = 0.0 if delay_time_ms is None else float(delay_time_ms)
+        delay_frames = int(round(delay_ms * float(fs) / 1000.0)) if int(fs) > 0 else 0
+
+        chunks = []
+
         def _pcm16_to_float32_frames(pcm_bytes: bytes, got_frames: int, got_ch: int) -> np.ndarray:
             """Best-effort decode for engine capture_read payload.
 
@@ -1784,80 +1793,82 @@ def _playrec_engine(
                 return np.zeros((0, ch), dtype=np.float32)
             return x.reshape(frames_eff, ch)
 
-        # Optional pre-roll: record before starting playback.
-        if delay_frames < 0 and int(in_ch) > 0:
-            pre = int(-delay_frames)
-            got = 0
-            deadline = time.time() + (float(pre) / float(fs) if float(fs) > 0 else 0.0) + 2.0
-            while got < pre and time.time() < deadline:
-                r = c.request({"cmd": "capture_read", "max_frames": int(min(chunk_frames, pre - got))})
-                pcm = base64.b64decode(r.get("pcm16_b64", "") or "")
-                got_frames = int(r.get("frames", 0))
-                got_ch = int(r.get("channels", 0))
-                if got_frames > 0 and got_ch > 0 and pcm:
-                    x0 = _pcm16_to_float32_frames(pcm, got_frames, got_ch)
-                    if x0.size <= 0:
+        try:
+            # Optional pre-roll: record before starting playback.
+            if delay_frames < 0 and int(in_ch) > 0:
+                pre = int(-delay_frames)
+                got = 0
+                deadline = time.time() + (float(pre) / float(fs) if float(fs) > 0 else 0.0) + 2.0
+                while got < pre and time.time() < deadline:
+                    r = c.request({"cmd": "capture_read", "max_frames": int(min(chunk_frames, pre - got))})
+                    pcm = base64.b64decode(r.get("pcm16_b64", "") or "")
+                    got_frames = int(r.get("frames", 0))
+                    got_ch = int(r.get("channels", 0))
+                    if got_frames > 0 and got_ch > 0 and pcm:
+                        x0 = _pcm16_to_float32_frames(pcm, got_frames, got_ch)
+                        if x0.size <= 0:
+                            time.sleep(0.002)
+                            continue
+                        chunks.append(x0)
+                        got += int(x0.shape[0])
+                    else:
+                        time.sleep(0.002)
+
+            for i in range(0, frames, int(chunk_frames)):
+                blk = y[i : i + int(chunk_frames)]
+                off = 0
+                while off < int(blk.shape[0]):
+                    sub = blk[off:]
+                    pcm16 = np.clip(sub, -1.0, 1.0)
+                    pcm16 = (pcm16 * 32767.0).astype(np.int16)
+                    b64 = base64.b64encode(pcm16.tobytes()).decode("ascii")
+                    r0 = c.request({"cmd": "play_write", "pcm16_b64": b64})
+                    accepted = int(r0.get("accepted_frames", int(sub.shape[0])))
+                    if accepted <= 0:
+                        if blocking:
+                            # Keep draining capture while output buffer is full.
+                            try:
+                                _ = c.request({"cmd": "capture_read", "max_frames": int(chunk_frames)})
+                            except Exception:
+                                pass
                         time.sleep(0.002)
                         continue
-                    chunks.append(x0)
-                    got += int(x0.shape[0])
-                else:
-                    time.sleep(0.002)
+                    off += accepted
 
-        for i in range(0, frames, int(chunk_frames)):
-            blk = y[i : i + int(chunk_frames)]
-            off = 0
-            while off < int(blk.shape[0]):
-                sub = blk[off:]
-                pcm16 = np.clip(sub, -1.0, 1.0)
-                pcm16 = (pcm16 * 32767.0).astype(np.int16)
-                b64 = base64.b64encode(pcm16.tobytes()).decode("ascii")
-                r0 = c.request({"cmd": "play_write", "pcm16_b64": b64})
-                accepted = int(r0.get("accepted_frames", int(sub.shape[0])))
-                if accepted <= 0:
-                    if blocking:
-                        # Keep draining capture while output buffer is full.
-                        try:
-                            _ = c.request({"cmd": "capture_read", "max_frames": int(chunk_frames)})
-                        except Exception:
-                            pass
-                    time.sleep(0.002)
-                    continue
-                off += accepted
+                if blocking:
+                    r = c.request({"cmd": "capture_read", "max_frames": int(chunk_frames)})
+                    pcm = base64.b64decode(r["pcm16_b64"])
+                    got_frames = int(r["frames"])
+                    got_ch = int(r["channels"])
+                    if got_frames > 0 and got_ch > 0:
+                        x = _pcm16_to_float32_frames(pcm, got_frames, got_ch)
+                        if x.size > 0:
+                            chunks.append(x)
+
+            c.request({"cmd": "play_finish"})
 
             if blocking:
-                r = c.request({"cmd": "capture_read", "max_frames": int(chunk_frames)})
-                pcm = base64.b64decode(r["pcm16_b64"])
-                got_frames = int(r["frames"])
-                got_ch = int(r["channels"])
-                if got_frames > 0 and got_ch > 0:
-                    x = _pcm16_to_float32_frames(pcm, got_frames, got_ch)
-                    if x.size > 0:
-                        chunks.append(x)
-
-        c.request({"cmd": "play_finish"})
-
-        if blocking:
-            t_end = time.time() + float(frames) / float(fs) + 2.0
-            while time.time() < t_end:
-                r = c.request({"cmd": "capture_read", "max_frames": int(chunk_frames)})
-                pcm = base64.b64decode(r["pcm16_b64"])
-                got_frames = int(r["frames"])
-                got_ch = int(r["channels"])
-                eof = bool(r.get("eof"))
-                if got_frames > 0 and got_ch > 0:
-                    x = _pcm16_to_float32_frames(pcm, got_frames, got_ch)
-                    if x.size > 0:
-                        chunks.append(x)
-                if eof and got_frames == 0:
-                    break
-                time.sleep(0.005)
-            _wait_session_end(c, timeout_s=1.0)
+                t_end = time.time() + float(frames) / float(fs) + 2.0
+                while time.time() < t_end:
+                    r = c.request({"cmd": "capture_read", "max_frames": int(chunk_frames)})
+                    pcm = base64.b64decode(r["pcm16_b64"])
+                    got_frames = int(r["frames"])
+                    got_ch = int(r["channels"])
+                    eof = bool(r.get("eof"))
+                    if got_frames > 0 and got_ch > 0:
+                        x = _pcm16_to_float32_frames(pcm, got_frames, got_ch)
+                        if x.size > 0:
+                            chunks.append(x)
+                    if eof and got_frames == 0:
+                        break
+                    time.sleep(0.005)
+                _wait_session_end(c, timeout_s=1.0)
+        finally:
+            try:
+                c.request({"cmd": "session_stop"})
+            except Exception:
+                pass
     finally:
-        try:
-            c.request({"cmd": "session_stop"})
-        except Exception:
-            pass
         c.close()
 
     if int(frames) <= 0:
@@ -1878,6 +1889,11 @@ def _playrec_engine(
             x = np.concatenate([x, pad_ch], axis=1)
         else:
             x = x[:, : int(in_ch)]
+
+    if return_full:
+        if save_wav and wav_path_abs:
+            _write_wav_from_float32(wav_path_abs, x, fs)
+        return x
 
     if alignment:
         # Align recording using one selected input channel, then apply the same
@@ -2187,13 +2203,19 @@ def rec(
     Raises:
         ValueError: If parameters are inconsistent (e.g. `frames` missing with `out=None`).
     """
+    mapping_cols = None
     if mapping is not None:
-        # Minimal mapping: record specific input channels into output columns (1-based).
+        # Mapping selects/reorders input channels from the recorded multi-channel stream (1-based).
         m = list(mapping) if isinstance(mapping, (list, tuple)) else None
         if not m:
             raise ValueError("mapping must be a non-empty sequence")
-        # We'll record len(mapping) channels and return those columns.
-        channels = len(m)
+        cols = []
+        for ch in m:
+            ci = int(ch) - 1
+            if ci < 0:
+                raise ValueError("mapping channel must be >= 1 (1-based)")
+            cols.append(ci)
+        mapping_cols = cols
 
     if frames is None:
         if out is None:
@@ -2214,6 +2236,7 @@ def rec(
 
     if save_wav and not wav_path:
         raise ValueError("save_wav=True requires wav_path")
+    wav_path_abs = os.path.abspath(wav_path) if (save_wav and wav_path) else ""
 
     fs = float(samplerate) if samplerate is not None else (default.samplerate if default.samplerate is not None else _DEFAULT_SR_FALLBACK)
 
@@ -2224,16 +2247,21 @@ def rec(
             ch_def = default.channels[0]
             channels = int(ch_def) if ch_def is not None else 1
     ch_i = int(channels)
+    if mapping_cols is not None:
+        need_ch = int(max(mapping_cols) + 1)
+        if int(ch_i) < int(need_ch):
+            raise ValueError(f"channels ({ch_i}) must be >= max(mapping) ({need_ch})")
 
+    out_ch = int(len(mapping_cols)) if mapping_cols is not None else int(ch_i)
     if out is None:
-        out_arr = np.zeros((frames_i, ch_i), dtype=np.float32)
+        out_arr = np.zeros((frames_i, out_ch), dtype=np.float32)
     else:
         out_arr = np.asarray(out)
         if out_arr.dtype != np.float32:
             raise TypeError("rec() only supports float32 output; provide out with dtype=np.float32")
         if out_arr.shape[0] != frames_i:
             raise ValueError("out has incompatible number of frames")
-        if out_arr.ndim != 2 or int(out_arr.shape[1]) != int(ch_i):
+        if out_arr.ndim != 2 or int(out_arr.shape[1]) != int(out_ch):
             raise ValueError("out must have shape (frames, channels)")
 
     # Use device index so _rec_engine can resolve to name for the engine (device_in must be int).
@@ -2248,16 +2276,17 @@ def rec(
             except Exception:
                 in_idx = None
 
-    def _do_record() -> np.ndarray:
+    def _do_record_full() -> np.ndarray:
         delay_ms = 0.0 if delay_time is None else float(delay_time)
         if delay_ms < 0:
             raise ValueError("delay_time must be >= 0 (milliseconds)")
         if delay_ms > 0:
             time.sleep(float(delay_ms) / 1000.0)
+        # When mapping is used, record full channels then map in Python.
         y = _rec_engine(
             frames_i,
-            wav_path=wav_path,
-            save_wav=save_wav,
+            wav_path="",
+            save_wav=False,
             blocking=True,
             samplerate=int(fs),
             channels=int(ch_i),
@@ -2268,13 +2297,24 @@ def rec(
         assert isinstance(y, np.ndarray)
         return y
 
+    def _apply_mapping_and_save(y_full: np.ndarray) -> np.ndarray:
+        y = np.asarray(y_full, dtype=np.float32)
+        if y.ndim == 1:
+            y = y[:, None]
+        if mapping_cols is not None:
+            y = y[:, mapping_cols]
+        if save_wav and wav_path_abs:
+            _write_wav_from_float32(wav_path_abs, y, int(fs))
+        return y
+
     if not blocking:
         stop_ev = threading.Event()
         done_ev = threading.Event()
 
         def _worker() -> None:
             try:
-                y = _do_record()
+                y_full = _do_record_full()
+                y = _apply_mapping_and_save(y_full)
                 out_arr[...] = y
             except Exception:
                 # match audiodevice behavior: errors surface when waiting; we have no wait()
@@ -2293,7 +2333,8 @@ def rec(
         t.start()
         return out_arr
 
-    y = _do_record()
+    y_full = _do_record_full()
+    y = _apply_mapping_and_save(y_full)
     out_arr[...] = y
     return out_arr
 
@@ -2343,11 +2384,18 @@ def playrec(
     Returns:
         np.ndarray: Recorded audio (same object as out when out is provided).
     """
+    in_map_cols = None
     if input_mapping is not None:
         m = list(input_mapping) if isinstance(input_mapping, (list, tuple)) else None
         if not m:
             raise ValueError("input_mapping must be a non-empty sequence")
-        channels = len(m)
+        cols = []
+        for ch in m:
+            ci = int(ch) - 1
+            if ci < 0:
+                raise ValueError("input_mapping channel must be >= 1 (1-based)")
+            cols.append(ci)
+        in_map_cols = cols
     if output_mapping is not None:
         m = list(output_mapping) if isinstance(output_mapping, (list, tuple)) else None
         if not m:
@@ -2380,6 +2428,7 @@ def playrec(
 
     if save_wav and not wav_path:
         raise ValueError("save_wav=True requires wav_path")
+    wav_path_abs = os.path.abspath(wav_path) if (save_wav and wav_path) else ""
 
     fs = float(samplerate) if samplerate is not None else (default.samplerate if default.samplerate is not None else _DEFAULT_SR_FALLBACK)
 
@@ -2391,18 +2440,24 @@ def playrec(
     if channels is None:
         ch_def = default.channels[0]
         channels = int(ch_def) if ch_def is not None else 1
-    in_ch = int(channels)
+    in_ch_capture = int(channels)
+    if in_map_cols is not None:
+        need_ch = int(max(in_map_cols) + 1)
+        if int(in_ch_capture) < int(need_ch):
+            # capture enough channels to be able to map
+            in_ch_capture = int(need_ch)
+    out_ch_return = int(len(in_map_cols)) if in_map_cols is not None else int(in_ch_capture)
 
     if out is None:
-        out_arr = np.zeros((frames_i, in_ch), dtype=np.float32)
+        out_arr = np.zeros((frames_i, out_ch_return), dtype=np.float32)
     else:
         out_arr = np.asarray(out)
         if out_arr.dtype != np.float32:
             raise TypeError("playrec() only supports float32 output; provide out with dtype=np.float32")
         if out_arr.shape[0] != frames_i:
             raise ValueError("out has incompatible number of frames")
-        if out_arr.ndim != 2 or int(out_arr.shape[1]) != int(in_ch):
-            raise ValueError("out must have shape (frames, channels)")
+        if out_arr.ndim != 2 or int(out_arr.shape[1]) != int(out_ch_return):
+            raise ValueError("out must have shape (frames, channels) matching mapping")
 
     hostapi_name = str(getattr(default, "hostapi_name", "") or "MME")
     dev_in_name = ""
@@ -2430,13 +2485,13 @@ def playrec(
             hostapi_name = hostapi2 or hostapi_name
 
     def _do_playrec() -> np.ndarray:
-        x = _playrec_engine(
+        x_full = _playrec_engine(
             y_out,
             wav_path=wav_path,
-            save_wav=save_wav,
+            save_wav=False,
             blocking=True,
             samplerate=int(fs),
-            in_channels=int(in_ch),
+            in_channels=int(in_ch_capture),
             hostapi=hostapi_name,
             device_in=dev_in_name,
             device_out=dev_out_name,
@@ -2446,6 +2501,12 @@ def playrec(
             alignment=bool(alignment),
             alignment_channel=int(alignment_channel),
         )
+        x_full = np.asarray(x_full, dtype=np.float32)
+        if x_full.ndim == 1:
+            x_full = x_full[:, None]
+        x = x_full[:, in_map_cols] if in_map_cols is not None else x_full
+        if save_wav and wav_path_abs:
+            _write_wav_from_float32(wav_path_abs, x, int(fs))
         return x
 
     if not blocking:
@@ -2484,6 +2545,10 @@ def stream_playrecord(
     *,
     blocksize: int = 1024,
     delay_time: float = 0,
+    drain_time: float = 0,
+    auto_window: bool = False,
+    auto_window_channel: int = 1,
+    return_full: bool = False,
     alignment: bool = False,
     alignment_channel: int = 1,
     input_mapping=None,
@@ -2493,15 +2558,28 @@ def stream_playrecord(
 ):
     """Stream-based play+record helper (blocking).
 
-    This helper uses `ad.Stream` (callback streaming) to play `data` while recording input,
-    then returns the captured audio as a single ndarray.
+    Implementation note:
+    This helper is built on the engine-driven duplex path (same core logic as `playrec()`),
+    which drains capture until the engine indicates EOF. This avoids needing an explicit tail
+    "drain_time" to prevent end truncation.
 
     Args:
         data: Audio to play. Shape (frames,) or (frames, out_channels), float32-like.
         samplerate: Sample rate in Hz; defaults to `default.samplerate`.
         channels: Number of input channels to record; defaults to `default.channels[0]` or 1.
         blocksize: Callback block size (frames).
-        delay_time: Additional recording delay in milliseconds (>= 0). Implemented as a post-slice.
+        delay_time: Recording delay relative to playback, in milliseconds.
+            Mirrors `playrec()` semantics:
+            - delay_time > 0: window shifts later
+            - delay_time < 0: window starts earlier (pre-roll)
+        drain_time: Deprecated for `stream_playrecord()` and ignored (kept for backward compatibility).
+        auto_window: If True, ignore delay-based windowing and instead select the window of
+            length `len(data)` with maximum energy (RMS) from the recorded stream.
+            This is useful when the true playback-to-capture latency is unknown (e.g. microphone path).
+        auto_window_channel: 1-based channel index (in the captured stream) used for energy scoring
+            when auto_window=True.
+        return_full: If True, return the full captured recording (including any lead-in and tail),
+            without delay/alignment windowing. This is useful for debugging latency and truncation.
         alignment: If True, align recorded audio to stimulus using GCC-PHAT (see alignment_processing).
         input_mapping: 1-based input channel mapping; when given, channels=len(input_mapping).
         output_mapping: 1-based output channel mapping applied to data columns.
@@ -2511,11 +2589,18 @@ def stream_playrecord(
     Returns:
         np.ndarray: Recorded audio with shape (frames, channels).
     """
+    in_map_cols = None
     if input_mapping is not None:
         m = list(input_mapping) if isinstance(input_mapping, (list, tuple)) else None
         if not m:
             raise ValueError("input_mapping must be a non-empty sequence")
-        channels = len(m)
+        cols = []
+        for ch in m:
+            ci = int(ch) - 1
+            if ci < 0:
+                raise ValueError("input_mapping channel must be >= 1 (1-based)")
+            cols.append(ci)
+        in_map_cols = cols
 
     y_out0 = np.asarray(data, dtype=np.float32)
     if y_out0.ndim == 1:
@@ -2547,119 +2632,101 @@ def stream_playrecord(
     if channels is None:
         ch_def = default.channels[0]
         channels = int(ch_def) if ch_def is not None else 1
-    in_ch = int(channels)
-
-    delay_ms = 0.0 if delay_time is None else float(delay_time)
-    if delay_ms < 0:
-        raise ValueError("delay_time must be >= 0 (milliseconds)")
-    delay_frames = int(round(delay_ms * float(fs) / 1000.0)) if fs > 0 else 0
+    in_ch_capture = int(channels)
+    if in_map_cols is not None:
+        need_ch = int(max(in_map_cols) + 1)
+        if int(in_ch_capture) < int(need_ch):
+            raise ValueError(f"channels ({in_ch_capture}) must be >= max(input_mapping) ({need_ch})")
+    out_ch_return = int(len(in_map_cols)) if in_map_cols is not None else int(in_ch_capture)
 
     if save_wav and not wav_path:
         raise ValueError("save_wav=True requires wav_path")
     wav_path_abs = os.path.abspath(wav_path) if (save_wav and wav_path) else ""
 
-    rec_chunks = []
-    out_pos = [0]
-    captured = [0]
-    # When alignment=True we need extra tail capture; otherwise the stimulus may appear
-    # late in the recording (device/output latency), causing the aligned segment to
-    # run out of data and get zero-padded.
-    extra_tail_frames = 0
-    if alignment and fs > 0:
-        extra_tail_frames = int(fs)  # 1.0s tail capture
-    target_capture = int(frames_i + max(0, delay_frames) + max(0, extra_tail_frames))
+    if bool(alignment) and bool(auto_window):
+        raise ValueError("alignment and auto_window are mutually exclusive (pick one)")
+    if bool(return_full) and bool(auto_window):
+        raise ValueError("return_full and auto_window are mutually exclusive (pick one)")
 
-    def cb(indata, outdata, frames, time_info, status):
-        # output
-        p0 = int(out_pos[0])
-        p1 = p0 + int(frames)
-        if p0 < frames_i:
-            outdata[:] = 0.0
-            outdata[: max(0, min(frames_i - p0, int(frames)))] = y_out0[p0: min(frames_i, p1)]
+    # Engine-driven playrec drains to EOF; drain_time is not needed here (deprecated).
+    delay_ms = 0.0 if delay_time is None else float(delay_time)
+
+    if return_full or auto_window:
+        rec_full = _playrec_engine(
+            y_out0,
+            wav_path="",
+            save_wav=False,
+            blocking=True,
+            samplerate=int(fs),
+            in_channels=int(in_ch_capture),
+            hostapi=None,
+            device_in=None,
+            device_out=None,
+            rb_seconds=None,
+            chunk_frames=int(blocksize),
+            delay_time_ms=0.0,
+            alignment=False,
+            alignment_channel=int(alignment_channel),
+            return_full=True,
+        )
+        rec_full = np.asarray(rec_full, dtype=np.float32)
+        if rec_full.ndim == 1:
+            rec_full = rec_full[:, None]
+        rec_full = rec_full[:, in_map_cols] if in_map_cols is not None else rec_full
+
+        if return_full:
+            if save_wav and wav_path_abs:
+                _write_wav_from_float32(wav_path_abs, rec_full, int(fs))
+            return rec_full.astype(np.float32, copy=False)
+
+        win = int(frames_i)
+        if win <= 0:
+            x = rec_full
         else:
-            outdata[:] = 0.0
-        out_pos[0] = p1
+            ci = int(auto_window_channel) - 1
+            if ci < 0:
+                ci = 0
+            if rec_full.ndim != 2 or int(rec_full.shape[1]) <= 0:
+                ci = 0
+            elif ci >= int(rec_full.shape[1]):
+                ci = int(rec_full.shape[1]) - 1
 
-        # input
-        if indata.size and int(indata.shape[1]) > 0:
-            rec_chunks.append(indata.copy())
-            captured[0] += int(indata.shape[0])
+            if rec_full.shape[0] < win:
+                pad = np.zeros((win - rec_full.shape[0], rec_full.shape[1]), dtype=np.float32)
+                rec_full = np.concatenate([rec_full, pad], axis=0)
 
-        if captured[0] >= target_capture and out_pos[0] >= frames_i:
-            raise CallbackStop()
+            ref = rec_full[:, ci].astype(np.float32, copy=False)
+            s2 = ref * ref
+            cs = np.concatenate([np.zeros((1,), dtype=np.float64), np.cumsum(s2, dtype=np.float64)])
+            n_start = int(ref.shape[0] - win + 1)
+            start = 0 if n_start <= 1 else int(np.argmax(cs[win:] - cs[:-win]))
+            x = rec_full[start : start + win, :]
 
-    with Stream(
+        if save_wav and wav_path_abs:
+            _write_wav_from_float32(wav_path_abs, x, int(fs))
+        return x.astype(np.float32, copy=False)
+
+    x_full = _playrec_engine(
+        y_out0,
+        wav_path="",
+        save_wav=False,
+        blocking=True,
         samplerate=int(fs),
-        channels=(int(in_ch), int(y_out0.shape[1])),
-        blocksize=int(blocksize),
-        callback=cb,
-    ):
-        # Busy-wait with sleep; Stream runs in its own worker thread.
-        # Give some extra wall-clock slack for scheduling jitter.
-        timeout_s = (float(target_capture) / float(fs) if fs > 0 else 0.0) + 2.0
-        t0 = time.time()
-        while time.time() - t0 < timeout_s:
-            if captured[0] >= target_capture and out_pos[0] >= frames_i:
-                break
-            time.sleep(0.01)
-
-    if rec_chunks:
-        rec_raw = np.concatenate(rec_chunks, axis=0)
-    else:
-        rec_raw = np.zeros((0, int(in_ch)), dtype=np.float32)
-
-    # Ensure channels.
-    if rec_raw.ndim == 1:
-        rec_raw = rec_raw[:, None]
-    if rec_raw.shape[1] != int(in_ch):
-        if rec_raw.shape[1] < int(in_ch):
-            pad_ch = np.zeros((rec_raw.shape[0], int(in_ch) - rec_raw.shape[1]), dtype=np.float32)
-            rec_raw = np.concatenate([rec_raw, pad_ch], axis=1)
-        else:
-            rec_raw = rec_raw[:, : int(in_ch)]
-
-    if alignment:
-        try:
-            from .alignment_processing import AlignmentProcessing
-
-            stim = np.asarray(y_out0, dtype=np.float32)
-            stim_mono = np.mean(stim, axis=1) if (stim.ndim == 2 and stim.shape[1] > 1) else stim.reshape(-1)
-
-            # alignment_channel is 1-based (1=CH1).
-            ci_ref = int(alignment_channel) - 1
-            if ci_ref < 0:
-                ci_ref = 0
-            if ci_ref >= int(in_ch):
-                ci_ref = int(in_ch) - 1 if int(in_ch) > 0 else 0
-            rec_ref = rec_raw[:, ci_ref].reshape(-1)
-
-            align_frames, _, _ = AlignmentProcessing.gcc_phat(stim_mono, rec_ref)
-            start = int(align_frames)
-            if start < 0:
-                start = 0
-            end = start + int(frames_i)
-            if end > rec_raw.shape[0]:
-                end = int(rec_raw.shape[0])
-            x = rec_raw[start:end, :]
-        except Exception:
-            x = rec_raw
-    else:
-        x = rec_raw
-
-    # Apply delay windowing (unless alignment already extracted exact segment).
-    if not alignment:
-        start = int(delay_frames) if int(delay_frames) > 0 else 0
-        need = int(start) + int(frames_i)
-        if x.shape[0] < need:
-            pad = np.zeros((need - x.shape[0], int(in_ch)), dtype=np.float32)
-            x = np.concatenate([x, pad], axis=0)
-        x = x[start: start + int(frames_i)]
-    else:
-        if x.shape[0] < int(frames_i):
-            pad = np.zeros((int(frames_i) - x.shape[0], int(in_ch)), dtype=np.float32)
-            x = np.concatenate([x, pad], axis=0)
-        x = x[: int(frames_i)]
-
+        in_channels=int(in_ch_capture),
+        hostapi=None,
+        device_in=None,
+        device_out=None,
+        rb_seconds=None,
+        chunk_frames=int(blocksize),
+        delay_time_ms=float(delay_ms),
+        alignment=bool(alignment),
+        alignment_channel=int(alignment_channel),
+        return_full=False,
+    )
+    x_full = np.asarray(x_full, dtype=np.float32)
+    if x_full.ndim == 1:
+        x_full = x_full[:, None]
+    x = x_full[:, in_map_cols] if in_map_cols is not None else x_full
     if save_wav and wav_path_abs:
         _write_wav_from_float32(wav_path_abs, x, int(fs))
     return x.astype(np.float32, copy=False)
@@ -2728,6 +2795,7 @@ class _StreamBase:
         blocksize: int = 0,
         latency=None,
         channels=None,
+        mapping=None,
         callback=None,
         delay_time=0,
     ) -> None:
@@ -2743,6 +2811,10 @@ class _StreamBase:
             latency: Kept for compatibility; low-latency hint (best-effort).
             channels: Channel count. For duplex: int or (in_ch, out_ch). For input/output: int.
                 Format: int or (int, int), e.g. 2 or (1, 2).
+            mapping: 1-based input channel mapping (InputStream/Stream only). If provided, the
+                engine still captures `channels` input channels, but the callback receives only
+                the selected/reordered channels with shape (frames, len(mapping)).
+                Requires: channels >= max(mapping). Format: non-empty sequence, e.g. [1] or [2, 1].
             callback: Callback with signature (indata, outdata, frames, time_info, status).
                 Format: indata (frames, in_ch) float32; outdata (frames, out_ch) float32, write in
                 callback; frames int; time_info dict; status CallbackFlags. Raise CallbackStop or
@@ -2757,6 +2829,18 @@ class _StreamBase:
         self.blocksize = int(blocksize or 1024)
         self.latency = latency
         self.channels = channels
+        self._mapping_cols = None
+        if mapping is not None:
+            m = list(mapping) if isinstance(mapping, (list, tuple)) else None
+            if not m:
+                raise ValueError("mapping must be a non-empty sequence")
+            cols = []
+            for ch in m:
+                ci = int(ch) - 1
+                if ci < 0:
+                    raise ValueError("mapping channel must be >= 1 (1-based)")
+                cols.append(ci)
+            self._mapping_cols = cols
         self.callback = callback
         self.delay_time = 0.0 if delay_time is None else float(delay_time)
 
@@ -2920,27 +3004,43 @@ class _StreamBase:
         backend_eff, engine_hostapi, _disp = _hostapi_display_to_engine(hostapi_name)
 
         # Channels
-        in_ch = 0
+        in_ch_capture = 0
+        in_ch_cb = 0
         out_ch = 0
         mode = "playrec"
         return_audio = True
         if self.kind == "input":
-            in_ch = int(self.channels or (default.channels[0] or 1))
+            in_ch_capture = int(self.channels or (default.channels[0] or 1))
             out_ch = 0
         elif self.kind == "output":
             # OutputStream does not need input; use "play" mode for stability.
-            in_ch = 0
+            in_ch_capture = 0
             out_ch = int(self.channels or (default.channels[1] or 1))
             mode = "play"
             return_audio = False
         else:
             if isinstance(self.channels, (list, tuple)) and len(self.channels) == 2:
-                in_ch = int(self.channels[0] or 1)
+                in_ch_capture = int(self.channels[0] or 1)
                 out_ch = int(self.channels[1] or 1)
             else:
                 v = int(self.channels or (default.channels[0] or 1))
-                in_ch = v
+                in_ch_capture = v
                 out_ch = v
+
+        if int(in_ch_capture) < 0:
+            in_ch_capture = 0
+        if int(out_ch) < 0:
+            out_ch = 0
+
+        mapping_cols = self._mapping_cols
+        if mapping_cols is not None and int(in_ch_capture) > 0:
+            need_ch = int(max(mapping_cols) + 1)
+            if int(in_ch_capture) < int(need_ch):
+                raise ValueError(f"channels ({in_ch_capture}) must be >= max(mapping) ({need_ch})")
+            in_ch_cb = int(len(mapping_cols))
+        else:
+            mapping_cols = None
+            in_ch_cb = int(in_ch_capture)
 
         c = AudioDeviceClient(default.host, default.port, timeout=float(default.timeout))
         self._client = c
@@ -2954,7 +3054,7 @@ class _StreamBase:
                     "hostapi": engine_hostapi,
                     "mode": mode,
                     "sr": int(self.samplerate),
-                    "in_ch": int(in_ch),
+                    "in_ch": int(in_ch_capture),
                     "out_ch": int(out_ch),
                     "device_in": dev_in,
                     "device_out": dev_out,
@@ -2973,7 +3073,7 @@ class _StreamBase:
             # Optional capture delay for InputStream: discard initial frames so the effective
             # recording window starts later, while keeping the same callback frame counts.
             delay_remain = 0
-            if self.kind == "input" and int(in_ch) > 0:
+            if self.kind == "input" and int(in_ch_capture) > 0:
                 delay_frames = int(round(float(self.delay_time) * float(self.samplerate) / 1000.0))
                 if delay_frames > 0:
                     drained = 0
@@ -3008,8 +3108,8 @@ class _StreamBase:
             cb_overrun_total = 0
             while not self._stop.is_set():
                 # Read input
-                indata = np.zeros((frames, in_ch), dtype=np.float32)
-                if in_ch > 0:
+                indata_cap = np.zeros((frames, int(in_ch_capture)), dtype=np.float32)
+                if int(in_ch_capture) > 0:
                     # If delay_time is enabled for InputStream, drop initial samples until
                     # delay_remain is consumed, then deliver full blocks to the callback.
                     filled = 0
@@ -3057,9 +3157,12 @@ class _StreamBase:
                             continue
 
                         take = int(min(got_frames, frames - filled))
-                        indata[filled : filled + take, :take and got_ch_eff] = x[:take]
+                        ch_take = int(min(int(got_ch_eff), int(in_ch_capture), int(x.shape[1])))
+                        if take > 0 and ch_take > 0:
+                            indata_cap[filled : filled + take, :ch_take] = x[:take, :ch_take]
                         filled += take
 
+                indata = indata_cap[:, mapping_cols] if mapping_cols is not None else indata_cap
                 outdata = np.zeros((frames, out_ch), dtype=np.float32)
                 tnow = time.time()
                 time_info = {
@@ -3139,7 +3242,7 @@ class _StreamBase:
                         if accepted <= 0:
                             # For OutputStream we use playrec with a dummy input channel.
                             # If output buffer is full, optionally drain input to avoid input ringbuffer overflow.
-                            if self.kind == "output" and in_ch > 0:
+                            if self.kind == "output" and int(in_ch_capture) > 0:
                                 try:
                                     _ = c.request({"cmd": "capture_read", "max_frames": int(frames)})
                                 except Exception:
@@ -3189,14 +3292,38 @@ class Stream(_StreamBase):
 
 class InputStream(_StreamBase):
     """Input-only callback stream."""
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(
+        self,
+        *,
+        samplerate=None,
+        blocksize: int = 0,
+        latency=None,
+        channels=None,
+        mapping=None,
+        callback=None,
+        delay_time=0,
+    ) -> None:
         """Create an input stream.
 
         Args:
-            *args: Forwarded to `_StreamBase`.
-            **kwargs: Forwarded to `_StreamBase` (notably `callback`, `samplerate`, `channels`).
+            samplerate: Sample rate in Hz. Uses default.samplerate if None.
+            blocksize: Frames per callback; 0 uses default.
+            latency: Compatibility arg.
+            channels: Input channel count captured from the device.
+            mapping: 1-based input channel mapping applied before callback. Requires channels >= max(mapping).
+            callback: Callback signature (indata, outdata, frames, time_info, status).
+            delay_time: Delay before delivering input to callback (ms).
         """
-        super().__init__(kind="input", *args, **kwargs)
+        super().__init__(
+            kind="input",
+            samplerate=samplerate,
+            blocksize=blocksize,
+            latency=latency,
+            channels=channels,
+            mapping=mapping,
+            callback=callback,
+            delay_time=delay_time,
+        )
 
 
 class OutputStream(_StreamBase):
@@ -3217,12 +3344,24 @@ class LongRecordingHandle:
     path: str
     _proc: Optional[subprocess.Popen]
     _client: AudioDeviceClient
+    _postprocess_stop: Optional["threading.Event"] = None
+    _postprocess_thread: Optional["threading.Thread"] = None
 
     def stop(self) -> None:
         """Stop the long recording session and release resources."""
         try:
             self._client.request({"cmd": "session_stop"})
         finally:
+            if self._postprocess_stop is not None:
+                try:
+                    self._postprocess_stop.set()
+                except Exception:
+                    pass
+            if self._postprocess_thread is not None:
+                try:
+                    self._postprocess_thread.join()
+                except Exception:
+                    pass
             self._client.close()
             if self._proc is not None:
                 try:
@@ -3232,7 +3371,125 @@ class LongRecordingHandle:
 
     def wait(self) -> str:
         """Return the output path (kept for compatibility)."""
+        if self._postprocess_thread is not None:
+            try:
+                self._postprocess_thread.join()
+            except Exception:
+                pass
         return self.path
+
+
+def _rec_long_rotated_path(base_path: str, seg_idx: int) -> str:
+    # Keep consistent with audio_engine/src/tasks/recorder.rs rotated_path()
+    if int(seg_idx) <= 0:
+        return base_path
+    p = Path(base_path)
+    stem = p.stem or "record"
+    ext = p.suffix[1:] if p.suffix else "wav"
+    parent = p.parent
+    return str(parent / f"{stem}_{int(seg_idx):05}.{ext}")
+
+
+def _wav_map_channels_atomic(path: str, *, mapping_cols: list[int], block_frames: int = 65536) -> None:
+    """
+    Rewrite an int16 PCM WAV file keeping only selected channels (0-based cols).
+    Uses atomic replace (write to .tmp then os.replace).
+    """
+    if not mapping_cols:
+        return
+
+    tmp_path = f"{path}.tmp"
+    try:
+        with wave.open(path, "rb") as r:
+            ch = int(r.getnchannels())
+            sw = int(r.getsampwidth())
+            sr = int(r.getframerate())
+            nframes = int(r.getnframes())
+
+            if ch <= 0 or sw <= 0 or sr <= 0:
+                return
+            if sw != 2:
+                raise ValueError(f"only 16-bit PCM wav is supported for mapping (sampwidth={sw})")
+            if any((ci < 0 or ci >= ch) for ci in mapping_cols):
+                raise ValueError(f"mapping out of range: file has {ch} channels, cols={mapping_cols}")
+
+            with wave.open(tmp_path, "wb") as w:
+                w.setnchannels(int(len(mapping_cols)))
+                w.setsampwidth(2)
+                w.setframerate(int(sr))
+
+                frames_left = nframes
+                while frames_left > 0:
+                    n = int(min(int(block_frames), frames_left))
+                    frames = r.readframes(n)
+                    if not frames:
+                        break
+                    pcm = np.frombuffer(frames, dtype="<i2")
+                    # Defensive: ensure whole frames.
+                    if pcm.size % ch != 0:
+                        pcm = pcm[: (pcm.size // ch) * ch]
+                    if pcm.size == 0:
+                        break
+                    pcm = pcm.reshape(-1, ch)
+                    pcm2 = pcm[:, mapping_cols]
+                    w.writeframes(pcm2.astype("<i2", copy=False).tobytes(order="C"))
+                    frames_left -= int(pcm.shape[0])
+
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
+def _rec_long_postprocess_loop(base_path_abs: str, *, mapping_cols: list[int], stop: "threading.Event") -> None:
+    # Process segment i only when segment i+1 exists (ensures segment i is closed).
+    next_idx = 0
+    sleep_s = 0.2
+
+    def _exists(idx: int) -> bool:
+        return os.path.exists(_rec_long_rotated_path(base_path_abs, idx))
+
+    def _stable(path: str) -> bool:
+        try:
+            s1 = os.path.getsize(path)
+            time.sleep(sleep_s)
+            s2 = os.path.getsize(path)
+            return int(s1) == int(s2) and int(s2) > 0
+        except Exception:
+            return False
+
+    while not stop.is_set():
+        p_i = _rec_long_rotated_path(base_path_abs, next_idx)
+        p_next = _rec_long_rotated_path(base_path_abs, next_idx + 1)
+        if os.path.exists(p_i) and os.path.exists(p_next):
+            try:
+                _wav_map_channels_atomic(p_i, mapping_cols=mapping_cols)
+            except Exception:
+                # Best-effort: skip this segment and try next time.
+                time.sleep(sleep_s)
+                continue
+            next_idx += 1
+            continue
+        time.sleep(sleep_s)
+
+    # Stop requested: process any remaining segments once they look stable.
+    while True:
+        p_i = _rec_long_rotated_path(base_path_abs, next_idx)
+        if not os.path.exists(p_i):
+            break
+        if not _stable(p_i):
+            # Give it a bit more time to finalize.
+            time.sleep(sleep_s)
+            if not _stable(p_i):
+                break
+        try:
+            _wav_map_channels_atomic(p_i, mapping_cols=mapping_cols)
+        except Exception:
+            break
+        next_idx += 1
 
 
 def rec_long(
@@ -3243,6 +3500,7 @@ def rec_long(
     channels: Optional[int] = None,
     device_in: Optional[int] = None,
     rb_seconds: Optional[int] = None,
+    mapping: Optional[list[int]] = None,
 ) -> LongRecordingHandle:
     """Record continuously to disk and rotate files periodically.
 
@@ -3255,6 +3513,9 @@ def rec_long(
             Format: int or None.
         channels: Number of input channels. Uses default.channels[0] or 1 if None.
             Format: int or None.
+        mapping: 1-based input channel mapping; when given, the engine records `channels` (or default)
+            and each rotated WAV segment is post-processed to keep only the selected channels.
+            Format: non-empty list of 1-based channel indices, e.g. [1] or [1, 3, 2].
         device_in: Input device index (global index from query_devices()). None = use default. Only int accepted.
         rb_seconds: Engine ring buffer size in seconds.
             Format: int or None.
@@ -3267,6 +3528,21 @@ def rec_long(
     fs = int(samplerate if samplerate is not None else (default.samplerate if default.samplerate is not None else _DEFAULT_SR_FALLBACK))
     ch_def = default.channels[0] if getattr(default, "channels", None) is not None else None
     ch = int(channels if channels is not None else (int(ch_def) if ch_def is not None else 1))
+    mapping_cols: Optional[list[int]] = None
+    if mapping is not None:
+        m = list(mapping) if isinstance(mapping, (list, tuple)) else None
+        if not m:
+            raise ValueError("mapping must be a non-empty sequence")
+        cols = []
+        for ch1 in m:
+            ci = int(ch1) - 1
+            if ci < 0:
+                raise ValueError("mapping channel must be >= 1 (1-based)")
+            cols.append(ci)
+        mapping_cols = cols
+        need_ch = int(max(mapping_cols) + 1)
+        if int(ch) < int(need_ch):
+            raise ValueError(f"channels ({ch}) must be >= max(mapping) ({need_ch})")
 
     path_abs = os.path.abspath(path)
 
@@ -3298,4 +3574,18 @@ def rec_long(
         }
     )
 
-    return LongRecordingHandle(path=path_abs, _proc=proc, _client=c)
+    h = LongRecordingHandle(path=path_abs, _proc=proc, _client=c)
+    if mapping_cols is not None:
+        import threading
+
+        stop = threading.Event()
+        t = threading.Thread(
+            target=_rec_long_postprocess_loop,
+            args=(path_abs,),
+            kwargs={"mapping_cols": mapping_cols, "stop": stop},
+            daemon=True,
+        )
+        t.start()
+        h._postprocess_stop = stop
+        h._postprocess_thread = t
+    return h

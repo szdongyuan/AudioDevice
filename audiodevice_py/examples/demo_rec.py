@@ -28,9 +28,9 @@ def main() -> None:
         save_wav=True,
         channels=6,
         delay_time=delay_ms,
+        mapping=[1,3,6]
     )
     print("recorded:", y.shape, y.dtype, "min/max:", float(y.min()), float(y.max()))
-    ad.play(y, blocking=True,samplerate=48000,channels=2)
 
 
 if __name__ == "__main__":

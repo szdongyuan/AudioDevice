@@ -1,6 +1,8 @@
 import numpy as np
 import audiodevice as ad
 import os
+import matplotlib.pyplot as plt
+
 
 from pathlib import Path
 import wave
@@ -33,7 +35,6 @@ def main() -> None:
     # but full-duplex playrec may produce zero input frames on some ASIO drivers.
     # WASAPI is the most compatible hostapi for duplex on Windows. hostapi is read-only; set device to change it.
     ad.default.samplerate = 48_000
-    ad.default.channels = 2
     ad.default.device = (14,18)
     ad.default.channels = (6,2)
 
@@ -43,11 +44,31 @@ def main() -> None:
     y = 0.1 * np.sin(2 * np.pi * 1000* t).astype(np.float32)
     y = np.stack([y, y], axis=1)  # (frames, channels)
 
+    import matplotlib.pyplot as plt
+
+# ---- plot time-domain waveform of y ----
+    plt.figure(figsize=(10,4))
+    plt.plot(t, y[:,0])
+    plt.xlabel("Time (s)")
+    plt.ylabel("Amplitude")
+    plt.title("Playback Signal (1 kHz Sine)")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
     delay_ms = 34
     wav_path = os.path.join(os.path.dirname(__file__), "playrecdelay34ms.wav")
+    input_mapping = [1,2,3,4,5,6]  # 1-based: only keep CH1 in returned recording
     # On some devices/drivers, the recorded WAV may contain a small tail.
     # Save an exact-length WAV by trimming/padding to the target frame count.
-    x = ad.playrec(y, save_wav=True, blocking=True, delay_time=delay_ms,wav_path=wav_path)
+    x = ad.playrec(
+        y,
+        save_wav=True,
+        blocking=True,
+        delay_time=delay_ms,
+        wav_path=wav_path,
+        input_mapping=input_mapping,
+    )
     x = np.asarray(x)
     if x.shape[0] < frames:
         pad = np.zeros((frames - x.shape[0],) + x.shape[1:], dtype=x.dtype)
