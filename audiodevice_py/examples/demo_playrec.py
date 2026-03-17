@@ -17,7 +17,7 @@ ad.print_default_devices()
 SAMPLERATE = 48000
 DURATION_S = 5.0
 DELAY_MS = 34
-DEVICE = (13, 13)  # (device_in, device_out)
+DEVICE = (10, 12)  # (device_in, device_out)
 DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
 OUTPUT_MAPPING = [1]  # 1-based
 INPUT_MAPPING = [1, 3, 5]  # 1-based: keep these input channels in returned recording

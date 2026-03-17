@@ -15,7 +15,7 @@ SAMPLERATE = 48000
 DURATION_S = 5.0
 DEVICE = (10, 12)  # (device_in, device_out)
 DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
-OUTPUT_MAPPING = [1, 2]  # 1-based
+OUTPUT_MAPPING = [1]  # 1-based
 
 ad.default.samplerate = SAMPLERATE
 ad.default.device = DEVICE

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import os
 import socket
 import subprocess
@@ -3060,25 +3061,128 @@ def _wait_session_end(client: AudioDeviceClient, timeout_s: float) -> None:
 
 
 class CallbackFlags:
-    """Minimal placeholder compatible with common callback usage patterns.
+    """Flag bits for the *status* argument to a stream *callback*.
 
-    Attributes are best-effort booleans and may not reflect real driver state in this MVP
-    implementation.
+    This follows the same usage pattern as `sounddevice.CallbackFlags`:
+    - `bool(status)` is True if any flags are set
+    - `str(status)` lists set flags (comma-separated)
+    - flags can be accumulated with `errors |= status`
+
+    Notes:
+        In this MVP, engine/driver overflow/underflow flags are not populated automatically.
+        The properties exist for compatibility and for user-side bookkeeping.
     """
-    input_underflow = False
-    input_overflow = False
-    output_underflow = False
-    output_overflow = False
-    priming_output = False
 
-    # --- audiodevice_py extensions (best-effort) ---
-    # Callback timing diagnostics (seconds). Updated by the stream worker loop.
-    callback_seconds: float = 0.0
-    block_seconds: float = 0.0
-    callback_overrun: bool = False
-    callback_overrun_ratio: float = 0.0
-    callback_overrun_consecutive: int = 0
-    callback_overrun_total: int = 0
+    __slots__ = (
+        "_flags",
+        # --- audiodevice_py extensions (best-effort) ---
+        # Callback timing diagnostics (seconds). Updated by the stream worker loop.
+        "callback_seconds",
+        "block_seconds",
+        "callback_overrun",
+        "callback_overrun_ratio",
+        "callback_overrun_consecutive",
+        "callback_overrun_total",
+    )
+
+    _INPUT_UNDERFLOW = 0x01
+    _INPUT_OVERFLOW = 0x02
+    _OUTPUT_UNDERFLOW = 0x04
+    _OUTPUT_OVERFLOW = 0x08
+    _PRIMING_OUTPUT = 0x10
+
+    _FLAG_NAMES = (
+        "input_underflow",
+        "input_overflow",
+        "output_underflow",
+        "output_overflow",
+        "priming_output",
+    )
+
+    def __init__(self, flags: int = 0x0):
+        self._flags = int(flags)
+        self.callback_seconds = 0.0
+        self.block_seconds = 0.0
+        self.callback_overrun = False
+        self.callback_overrun_ratio = 0.0
+        self.callback_overrun_consecutive = 0
+        self.callback_overrun_total = 0
+
+    def clear(self) -> None:
+        """Clear all flag bits (does not touch timing diagnostics)."""
+        self._flags = 0x0
+
+    def __repr__(self) -> str:
+        flags = str(self)
+        if not flags:
+            flags = "no flags set"
+        return f"<audiodevice.CallbackFlags: {flags}>"
+
+    def __str__(self) -> str:
+        return ", ".join(name.replace("_", " ") for name in self._FLAG_NAMES if getattr(self, name))
+
+    def __bool__(self) -> bool:
+        return bool(self._flags)
+
+    def __ior__(self, other):
+        if not isinstance(other, CallbackFlags):
+            return NotImplemented
+        self._flags |= other._flags
+        return self
+
+    def __or__(self, other):
+        if not isinstance(other, CallbackFlags):
+            return NotImplemented
+        return CallbackFlags(self._flags | other._flags)
+
+    def _hasflag(self, flag: int) -> bool:
+        return bool(self._flags & int(flag))
+
+    def _updateflag(self, flag: int, value: bool) -> None:
+        if value:
+            self._flags |= int(flag)
+        else:
+            self._flags &= ~int(flag)
+
+    @property
+    def input_underflow(self) -> bool:
+        return self._hasflag(self._INPUT_UNDERFLOW)
+
+    @input_underflow.setter
+    def input_underflow(self, value: bool) -> None:
+        self._updateflag(self._INPUT_UNDERFLOW, bool(value))
+
+    @property
+    def input_overflow(self) -> bool:
+        return self._hasflag(self._INPUT_OVERFLOW)
+
+    @input_overflow.setter
+    def input_overflow(self, value: bool) -> None:
+        self._updateflag(self._INPUT_OVERFLOW, bool(value))
+
+    @property
+    def output_underflow(self) -> bool:
+        return self._hasflag(self._OUTPUT_UNDERFLOW)
+
+    @output_underflow.setter
+    def output_underflow(self, value: bool) -> None:
+        self._updateflag(self._OUTPUT_UNDERFLOW, bool(value))
+
+    @property
+    def output_overflow(self) -> bool:
+        return self._hasflag(self._OUTPUT_OVERFLOW)
+
+    @output_overflow.setter
+    def output_overflow(self, value: bool) -> None:
+        self._updateflag(self._OUTPUT_OVERFLOW, bool(value))
+
+    @property
+    def priming_output(self) -> bool:
+        return self._hasflag(self._PRIMING_OUTPUT)
+
+    @priming_output.setter
+    def priming_output(self, value: bool) -> None:
+        self._updateflag(self._PRIMING_OUTPUT, bool(value))
 
 
 class CallbackStop(Exception):
@@ -3108,6 +3212,7 @@ class _StreamBase:
         output_mapping=None,
         callback=None,
         delay_time=0,
+        pacing: bool = True,
     ) -> None:
         """Create a stream object (not started yet).
 
@@ -3135,6 +3240,8 @@ class _StreamBase:
                 CallbackAbort to end the stream.
             delay_time: Delay before starting to deliver input to the callback, in milliseconds.
                 This is mainly useful for capture-only streams (InputStream). Format: float/int (ms).
+            pacing: Whether to pace the callback loop roughly in real-time (best-effort).
+                Set False for stress-testing (may overfill engine buffers).
         """
         self.kind = str(kind)
         self.samplerate = float(samplerate) if samplerate is not None else (
@@ -3150,7 +3257,9 @@ class _StreamBase:
         if output_mapping is not None:
             self._output_mapping_cols = _parse_1based_mapping_cols(output_mapping, arg_name="output_mapping")
         self.callback = callback
+        self._cb_style: Optional[str] = None
         self.delay_time = 0.0 if delay_time is None else float(delay_time)
+        self.pacing = bool(pacing)
 
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
@@ -3269,6 +3378,55 @@ class _StreamBase:
         """Context-manager exit: close the stream."""
         self.close()
         return False
+
+    def _pick_callback_style(self) -> str:
+        """Pick a sounddevice-compatible callback calling convention.
+
+        Returns:
+            str: One of:
+                - "full5": callback(indata, outdata, frames, time_info, status)
+                - "sd_input4": callback(indata, frames, time_info, status)
+                - "sd_output4": callback(outdata, frames, time_info, status)
+        """
+        if self.kind == "duplex":
+            return "full5"
+        cb = self.callback
+        if cb is None:
+            return "full5"
+        try:
+            sig = inspect.signature(cb)
+            params = list(sig.parameters.values())
+        except Exception:
+            return "full5"
+
+        for p in params:
+            if p.kind == inspect.Parameter.VAR_POSITIONAL:
+                return "full5"
+
+        positional = [
+            p for p in params
+            if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        ]
+        max_positional = len(positional)
+
+        if self.kind == "input" and max_positional <= 4:
+            return "sd_input4"
+        if self.kind == "output" and max_positional <= 4:
+            return "sd_output4"
+        return "full5"
+
+    def _invoke_callback(self, *, indata, outdata, frames: int, time_info: dict, status: CallbackFlags) -> None:
+        style = self._cb_style or "full5"
+        cb = self.callback
+        if cb is None:
+            return
+        if style == "sd_input4":
+            cb(indata, frames, time_info, status)
+            return
+        if style == "sd_output4":
+            cb(outdata, frames, time_info, status)
+            return
+        cb(indata, outdata, frames, time_info, status)
 
     def _resolve_hostapi_and_devices_for_stream(self) -> Tuple[str, str, str]:
         """Resolve effective hostapi/device names for stream startup.
@@ -3422,9 +3580,25 @@ class _StreamBase:
 
             next_tick = time.perf_counter()
             status = CallbackFlags()
+            self._cb_style = self._pick_callback_style()
+            pending_flags = 0
             cb_overrun_consecutive = 0
             cb_overrun_total = 0
             while not self._stop.is_set():
+                # Match sounddevice semantics: each callback sees a "fresh" status flags object.
+                # (Timing diagnostics are updated below.)
+                status.clear()
+                if pending_flags:
+                    # Apply I/O events observed in the previous block.
+                    status._flags |= int(pending_flags)
+                    pending_flags = 0
+                # Best-effort populate sounddevice-like overflow/underflow flags from the
+                # previous callback timing diagnostics.
+                if bool(getattr(status, "callback_overrun", False)):
+                    if self.kind in ("input", "duplex"):
+                        status.input_overflow = True
+                    if self.kind in ("output", "duplex"):
+                        status.output_underflow = True
                 # Read input
                 indata_cap = np.zeros((frames, int(in_ch_capture)), dtype=np.float32)
                 if int(in_ch_capture) > 0:
@@ -3491,7 +3665,13 @@ class _StreamBase:
 
                 try:
                     cb_t0 = time.perf_counter()
-                    self.callback(indata, outdata, frames, time_info, status)
+                    self._invoke_callback(
+                        indata=indata,
+                        outdata=outdata,
+                        frames=frames,
+                        time_info=time_info,
+                        status=status,
+                    )
                     cb_s = time.perf_counter() - cb_t0
                 except CallbackStop:
                     break
@@ -3519,18 +3699,8 @@ class _StreamBase:
                 status.callback_overrun_consecutive = int(cb_overrun_consecutive)
                 status.callback_overrun_total = int(cb_overrun_total)
 
-                # If callback is consistently far slower than real-time, raise so user sees feedback.
-                # Keep thresholds conservative to avoid breaking borderline cases.
-                if (
-                    block_dt > 0
-                    and cb_overrun_consecutive >= 3
-                    and ratio >= 2.0
-                ):
-                    raise RuntimeError(
-                        "Stream callback overrun: "
-                        f"callback took {cb_s:.3f}s, block is {block_dt:.3f}s (x{ratio:.1f}); "
-                        "callback must be non-blocking."
-                    )
+                # sounddevice-like behavior: do NOT raise on callback overruns.
+                # Report overruns via `status` instead (e.g. `status.input_overflow`).
 
                 # Write output
                 if out_ch > 0:
@@ -3565,6 +3735,9 @@ class _StreamBase:
                                 raise
                         accepted = int(r0.get("accepted_frames", int(sub.shape[0])))
                         if accepted <= 0:
+                            # Output buffer is full (backpressure). Report as sounddevice-like
+                            # output_overflow in the *next* callback.
+                            pending_flags |= int(status._OUTPUT_OVERFLOW)
                             # For OutputStream we use playrec with a dummy input channel.
                             # If output buffer is full, optionally drain input to avoid input ringbuffer overflow.
                             if self.kind == "output" and int(in_ch_capture) > 0:
@@ -3576,6 +3749,9 @@ class _StreamBase:
                             continue
                         if accepted > int(sub.shape[0]):
                             accepted = int(sub.shape[0])
+                        if accepted < int(sub.shape[0]):
+                            # Partial accept indicates output buffer pressure; mark overflow.
+                            pending_flags |= int(status._OUTPUT_OVERFLOW)
                         off += accepted
 
                 # Pace the loop roughly in real-time to avoid overfilling engine buffers.
@@ -3585,7 +3761,7 @@ class _StreamBase:
                     _prefill_n -= 1
                     if _prefill_n == 0:
                         next_tick = time.perf_counter()
-                elif block_dt > 0:
+                elif self.pacing and block_dt > 0:
                     next_tick += block_dt
                     now = time.perf_counter()
                     sleep_s = next_tick - now
@@ -3627,6 +3803,7 @@ class InputStream(_StreamBase):
         mapping=None,
         callback=None,
         delay_time=0,
+        pacing: bool = True,
     ) -> None:
         """Create an input stream.
 
@@ -3636,7 +3813,9 @@ class InputStream(_StreamBase):
             latency: Compatibility arg.
             channels: Input channel count captured from the device.
             mapping: 1-based input channel mapping applied before callback. Requires channels >= max(mapping).
-            callback: Callback signature (indata, outdata, frames, time_info, status).
+            callback: Callback signature like sounddevice:
+                callback(indata, frames, time_info, status) -> None
+                (The 5-arg form callback(indata, outdata, frames, time_info, status) is also accepted.)
             delay_time: Delay before delivering input to callback (ms).
         """
         super().__init__(
@@ -3648,6 +3827,7 @@ class InputStream(_StreamBase):
             mapping=mapping,
             callback=callback,
             delay_time=delay_time,
+            pacing=pacing,
         )
 
 
@@ -3663,6 +3843,7 @@ class OutputStream(_StreamBase):
         mapping=None,
         output_mapping=None,
         callback=None,
+        pacing: bool = True,
     ) -> None:
         """Create an output stream.
 
@@ -3676,7 +3857,9 @@ class OutputStream(_StreamBase):
                 has shape (frames, len(mapping)).
             output_mapping: 1-based output channel mapping applied after callback. Requires
                 channels >= max(output_mapping). Callback outdata has shape (frames, len(output_mapping)).
-            callback: Callback signature (indata, outdata, frames, time_info, status).
+            callback: Callback signature like sounddevice:
+                callback(outdata, frames, time_info, status) -> None
+                (The 5-arg form callback(indata, outdata, frames, time_info, status) is also accepted.)
         """
         # For OutputStream, sounddevice uses `mapping` to mean output mapping.
         if mapping is not None:
@@ -3696,6 +3879,7 @@ class OutputStream(_StreamBase):
             channels=channels,
             output_mapping=output_mapping,
             callback=callback,
+            pacing=pacing,
         )
 
 
