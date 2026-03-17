@@ -1,5 +1,5 @@
 """
-demo_stream_duplex.py - 最简 Stream(全双工) 示例：麦克风直通到扬声器 1.5 秒
+demo_stream_moniter.py - 最简 Stream(全双工) 示例：麦克风直通到扬声器（注意可能啸叫）
 """
 from pathlib import Path
 import wave
@@ -18,24 +18,27 @@ else:
     ad.init(timeout=10)
 ad.print_default_devices()
 
-SAMPLERATE = 44100
+SAMPLERATE = 48000
 BLOCKSIZE = 4096
-IN_CH = 1
+IN_CH = 6
 OUT_CH = 2
+RB_SECONDS = 8
+DEVICE = (10, 12)   # (device_in, device_out)
+DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
 DURATION_MS = 10000
 TARGET_FRAMES = int(round(SAMPLERATE * (DURATION_MS / 1000.0)))
 SAVE_CH = int(OUT_CH)
 # 选择要监听的输入通道（1-based）：1=CH1, 2=CH2...
-MONITOR_CH = 1
+MONITOR_CH = 3
 # 输出通道映射（1-based）：把 callback 写出的列路由到指定的设备输出通道。
 # 例如 [2] 表示把单通道监听信号送到右声道。
-OUTPUT_MAPPING = [1,2]
+OUTPUT_MAPPING = [1]
 
-# 对 Stream demo 更稳一些（避免调度抖动导致的缓冲问题）
-ad.default.samplerate = 44100
-ad.default.device = (15,17)
-ad.default.channels = (1,2)
-print(ad.default.device)
+# More stable defaults for stream demos
+ad.default.samplerate = SAMPLERATE
+ad.default.device = DEVICE
+ad.default.channels = DEFAULT_CHANNELS_NUM
+ad.default.rb_seconds = RB_SECONDS
 
 
 def save_wav(path: Path, data_f32: np.ndarray, samplerate: int, channels: int) -> None:

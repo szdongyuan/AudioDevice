@@ -5,6 +5,12 @@ This repository contains a **Windows-only** audio engine:
 - **Rust resident engine**: `audiodevice.exe` (TCP JSON-lines control)
 - **Python SDK**: `audiodevice_py/` (audiodevice-like API; all audio goes through Rust)
 
+For end users who received prebuilt packages, see:
+
+- `dist/INSTALL.md`
+- `dist/INSTALL_zh_CN.md`
+- `dist/API_USAGE.md`
+
 ## Architecture
 
 Python user code
@@ -79,8 +85,16 @@ This repo includes a helper script to create a distribution ZIP containing:
 Run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\dist\package_engine.ps1 -Profile release
+powershell -ExecutionPolicy Bypass -File .\dist\package_engine.ps1
 ```
+
+Notes:
+
+- The script packages binaries from `audiodevice_py\audiodevice\bin\` if present (wheel-like layout),
+  otherwise it falls back to `audio_engine\target\release\`.
+- Optional args:
+  - `-BinDir <dir>`: explicitly specify the folder containing `audiodevice.exe` / `portaudio.dll`
+  - `-OutZip <path>`: set output zip base name (timestamp is always appended)
 
 ## Run (engine)
 
@@ -98,17 +112,22 @@ python -m pip install -e audiodevice_py
 
 ### Engine auto-discovery / auto-download
 
-The Python SDK can auto-start the Rust engine if `ad.default.auto_start = True`.
+Recommended: call `ad.init()`, which enables auto-start and warms up device enumeration.
 
-Resolution order for the engine executable:
+Resolution order for locating `audiodevice.exe`:
 
-- Use `ad.default.engine_exe` if it points to an existing file
+- Use `ad.default.engine_exe` if it’s an existing file (absolute/relative path)
 - Otherwise, try to find `audiodevice.exe` on `PATH`
-- Otherwise, if running from this repo, auto-use `audio_engine/target/release/audiodevice.exe`
-- Otherwise, auto-download if you provide a URL:
-  - Set env `AUDIODEVICE_ENGINE_URL` to a `.zip` or `.exe`
-  - (Optional) set env `AUDIODEVICE_ENGINE_SHA256` to verify integrity
+- Otherwise, use the engine bundled in the wheel (if present)
+- Otherwise, if running from this monorepo, try `audio_engine/target/release/audiodevice.exe`
+- Otherwise, auto-download / auto-install if configured:
+  - Set env `AUDIODEVICE_ENGINE_URL` to a local path or HTTP(S) URL ending with `.zip` or `.exe`
+  - (Optional) set env `AUDIODEVICE_ENGINE_SHA256` for integrity verification
   - Or set `ad.default.engine_download_url` / `ad.default.engine_sha256`
+
+Engine ZIPs are unpacked to the cache directory by default:
+
+- `%LOCALAPPDATA%\audiodevice\engine\`
 
 ## Python usage
 
@@ -116,14 +135,24 @@ Resolution order for the engine executable:
 import audiodevice as ad
 import time
 
-ad.default.backend = "cpal"
-ad.default.hostapi = "ASIO"
+ad.init()
+print(ad.query_backends())
+ad.print_default_devices()
+
+# Host API is derived from selected devices (read-only).
+# Pick a host API by selecting its default devices:
+hs = ad.query_hostapis()
+target = "Windows WASAPI"  # or "ASIO" / "MME" / "DirectSound"
+h = next((x for x in hs if x["name"] == target), hs[0])
+ad.default.device = (h["default_input_device"], h["default_output_device"])
+
+# Or pick devices by *global index* from `ad.query_devices()` output:
+# ad.default.device = (0, 1)
+
 ad.default.samplerate = 48000
 ad.default.channels = 2
-ad.default.device_in = "ASIO4ALL"
-ad.default.device_out = "ASIO4ALL"
 
-y = ad.rec(48000, blocking=True)
+y = ad.rec(3.0, blocking=True)
 ad.play(y, blocking=True)
 y2 = ad.playrec(y, blocking=True)
 

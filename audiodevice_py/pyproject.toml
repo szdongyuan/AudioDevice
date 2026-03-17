@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "audiodevice"
 # version is overwritten by build_wheel.py at build time (0.1.0.postYYYYMMDDHHMM)
-version = "0.1.0.post202603161750"
+version = "0.1.0.post202603171414"
 description = "Windows-only audio engine SDK (Rust engine via TCP JSON), audiodevice-like API."
 requires-python = ">=3.10"
 dependencies = [

@@ -20,6 +20,28 @@ import numpy as np
 import audiodevice as ad
 from audiodevice.alignment_processing import AlignmentProcessing
 
+_root = Path(__file__).resolve().parent.parent
+_engine = _root / "audiodevice.exe"
+if _engine.is_file():
+    ad.init(engine_exe=str(_engine), engine_cwd=str(_root), timeout=10)
+else:
+    ad.init(timeout=10)
+ad.print_default_devices()
+
+SAMPLERATE = 48_000
+IN_CH = 6
+OUT_CH = 2
+DURATION_S = 2.0
+AMP = 0.1
+BLOCKSIZE = 1024
+ALIGNMENT_CH = 1  # 1-based
+DEVICE = (14, 18)  # (device_in, device_out)
+DEFAULT_CHANNELS_NUM = (IN_CH, OUT_CH)
+
+ad.default.device = DEVICE
+ad.default.samplerate = SAMPLERATE
+ad.default.channels = DEFAULT_CHANNELS_NUM
+
 
 def to_mono(x: np.ndarray) -> np.ndarray:
     x = np.asarray(x, dtype=np.float32)
@@ -125,31 +147,13 @@ def plot_full_waveform(
 
 
 def main() -> None:
-    FS = 48_000
-    IN_CH = 6
-    OUT_CH = 2
-    DURATION_S = 2.0
-    AMP = 0.1
-    BLOCKSIZE = 1024
-
-    root = Path(__file__).resolve().parent.parent
-    engine = root / "audiodevice.exe"
-    if engine.is_file():
-        ad.init(engine_exe=str(engine), engine_cwd=str(root), timeout=10)
-    else:
-        ad.init(timeout=10)
-
-    ad.default.device = (14, 18)
-    ad.default.samplerate = FS
-    ad.default.channels = (IN_CH, OUT_CH)
-
-    y_ref = make_stimulus(FS, DURATION_S, OUT_CH, AMP)
+    y_ref = make_stimulus(SAMPLERATE, DURATION_S, OUT_CH, AMP)
 
     x_playrec_raw = ad.playrec(y_ref, blocking=True, alignment=False)
-    x_playrec_aligned = ad.playrec(y_ref, blocking=True, alignment=True, alignment_channel=1)
+    x_playrec_aligned = ad.playrec(y_ref, blocking=True, alignment=True, alignment_channel=ALIGNMENT_CH)
 
     x_stream_raw = ad.stream_playrecord(y_ref, blocksize=BLOCKSIZE, alignment=False)
-    x_stream_aligned = ad.stream_playrecord(y_ref, blocksize=BLOCKSIZE, alignment=True, alignment_channel=1)
+    x_stream_aligned = ad.stream_playrecord(y_ref, blocksize=BLOCKSIZE, alignment=True, alignment_channel=ALIGNMENT_CH)
 
     d_pr_raw, _, _ = gcc_delay(y_ref, x_playrec_raw)
     d_pr_aln, _, _ = gcc_delay(y_ref, x_playrec_aligned)
@@ -167,7 +171,7 @@ def main() -> None:
 
     # 每个方法一张图（figure），直接弹出，不保存 png
     plot_full_waveform(
-        fs=FS,
+        fs=SAMPLERATE,
         title="playrec - full waveform (stimulus vs raw vs aligned)",
         stimulus=y_ref,
         raw=np.asarray(x_playrec_raw, dtype=np.float32),
@@ -175,7 +179,7 @@ def main() -> None:
         zoom_first_ms=500.0,
     )
     plot_full_waveform(
-        fs=FS,
+        fs=SAMPLERATE,
         title="stream_playrecord - full waveform (stimulus vs raw vs aligned)",
         stimulus=y_ref,
         raw=np.asarray(x_stream_raw, dtype=np.float32),

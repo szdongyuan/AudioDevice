@@ -1,31 +1,35 @@
 import numpy as np
-import os
-import audiodevice as ad
 from pathlib import Path
 
-current_file = Path(__file__).resolve()
-engine_path = current_file.parent.parent / "audiodevice.exe"
-ENGINE_EXE = str(engine_path)
+import audiodevice as ad
+
+_root = Path(__file__).resolve().parent.parent
+_engine = _root / "audiodevice.exe"
+if _engine.is_file():
+    ad.init(engine_exe=str(_engine), engine_cwd=str(_root), timeout=10)
+else:
+    ad.init(timeout=10)
+ad.print_default_devices()
+
+SAMPLERATE = 48000
+DURATION_S = 5.0
+DEVICE = (10, 12)  # (device_in, device_out)
+DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
+OUTPUT_MAPPING = [1, 2]  # 1-based
+
+ad.default.samplerate = SAMPLERATE
+ad.default.device = DEVICE
+ad.default.channels = DEFAULT_CHANNELS_NUM
 
 def main() -> None:
-    ad.default.auto_start = True
-    if engine_path.is_file():
-        ad.default.engine_exe = ENGINE_EXE
-        ad.default.engine_cwd = os.path.dirname(ENGINE_EXE)
-
-    # hostapi is read-only; it follows from default.device
-    ad.default.samplerate = 44100
-    ad.default.channels = (1,2)
-    ad.default.device = (15, 17)                                                         
-    fs = ad.default.samplerate
-    t = np.arange(fs*5, dtype=np.float32) / fs
-    output_mapping = [1,2]
-    n_out = int(len(output_mapping))
+    fs = int(SAMPLERATE)
+    t = np.arange(int(fs * DURATION_S), dtype=np.float32) / float(fs)
+    n_out = int(len(OUTPUT_MAPPING))
     freqs = 1000.0 + 200.0 * np.arange(n_out, dtype=np.float32)
     y = 0.1 * np.sin(2 * np.pi * t[:, None] * freqs[None, :]).astype(np.float32)
     if n_out == 1:
         y = y[:, 0]
-    ad.play(y, output_mapping=output_mapping, blocking=True)
+    ad.play(y, output_mapping=OUTPUT_MAPPING, blocking=True)
 
 if __name__ == "__main__":
     main()

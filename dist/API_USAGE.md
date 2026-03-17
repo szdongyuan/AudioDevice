@@ -23,7 +23,7 @@ import audiodevice as ad
 ad.init()
 ```
 
-如果你把引擎 ZIP 配置为环境变量（见 `INSTALL.md` / `INSTALL_zh_CN.md`），通常不需要传任何参数。
+默认分发的 whl 已内置引擎，通常不需要传任何参数。
 
 如果你希望指定固定路径或超时：
 
@@ -45,7 +45,7 @@ print(ad.query_devices())  # 会打印一个设备列表（类似表格）
 
 ## 3) Host API 与设备选择（常用）
 
-### 3.1 选择 Host API
+### 3.1 选择 Host API（`default.hostapi` 只读）
 
 常用的：
 
@@ -54,8 +54,16 @@ print(ad.query_devices())  # 会打印一个设备列表（类似表格）
 - `MME` / `DirectSound`（更传统，通常不推荐）
 
 ```python
-ad.default.hostapi = "ASIO"
-# 或 ad.default.hostapi = "Windows WASAPI"
+# Host API 是从“当前选择的设备”派生出来的（只读）。
+# 想切换到某个 Host API：选择该 Host API 下的默认输入/输出设备即可：
+hs = ad.query_hostapis()
+target = "Windows WASAPI"  # 或 "ASIO" / "MME" / "DirectSound"
+h = next((x for x in hs if x["name"] == target), hs[0])
+ad.default.device = (h["default_input_device"], h["default_output_device"])
+
+# 查看当前生效的 hostapi（由设备派生）：
+print("hostapi_index =", ad.default.hostapi)
+print("hostapi_name  =", getattr(ad.default, "hostapi_name", ""))
 ```
 
 ### 3.2 查看 Host API 列表
@@ -67,21 +75,19 @@ print(ad.query_hostapis_raw())    # 原始/扩展信息（dict）
 
 ### 3.3 选择默认输入/输出设备
 
-你可以用“全局设备索引”或“设备名”：
+目前 SDK 只支持用“全局设备索引”（`int`）选择设备。你可以先 `print(ad.query_devices())`，
+在输出里用设备 `name` 找到对应的 `index`。
 
 ```python
 # 用索引：分别指定 (输入设备index, 输出设备index)
 ad.default.device = (0, 1)
-
-# 或用名字（会做匹配；适合简单场景）
-ad.default.device = "Speakers"
 ```
 
-也可以直接指定输入/输出设备名（更直观）：
+也可以分别指定输入/输出设备索引（更直观）：
 
 ```python
-ad.default.device_in = "UMC ASIO Driver"
-ad.default.device_out = "UMC ASIO Driver"
+ad.default.device_in = 0
+ad.default.device_out = 1
 ```
 
 ## 4) 录音（rec）
@@ -91,16 +97,44 @@ import numpy as np
 import audiodevice as ad
 
 ad.init()
-ad.default.hostapi = "Windows WASAPI"
 
-y = ad.rec(3.0, blocking=True)  # 录 3 秒，返回 float32 ndarray
+fs = 48000
+sec = 3.0
+frames = int(round(fs * sec))
+
+# 录音 `frames` 帧（返回 float32 ndarray, shape=(frames, channels)）
+y = ad.rec(frames, blocking=True, samplerate=fs, channels=1)
 print(y.shape, y.dtype)
+```
+
+### 4.1 输入通道映射（input mapping）
+
+当你的输入设备是多通道（例如 6/8 路），你可以用 `mapping`（**1-based**）选择/重排要保留的输入通道：
+
+```python
+frames = int(round(48000 * 3.0))
+y = ad.rec(
+    frames,
+    blocking=True,
+    samplerate=48000,
+    channels=6,          # 必须 >= max(mapping)
+    mapping=[1, 3, 5],    # 1-based：保留 CH1/CH3/CH5，返回 shape=(frames, 3)
+)
+```
+
+### 4.2 延时（delay_time）
+
+`delay_time` 单位是 **毫秒**：会在开始采集前等待一段时间，但最终返回长度仍是 `frames`。
+
+```python
+frames = int(round(48000 * 3.0))
+y = ad.rec(frames, blocking=True, samplerate=48000, channels=1, delay_time=200)
 ```
 
 录音同时保存 WAV：
 
 ```python
-y = ad.rec(3.0, blocking=True, save_wav=True, wav_path="rec.wav")
+y = ad.rec(frames, blocking=True, save_wav=True, wav_path="rec.wav")
 ```
 
 ## 5) 播放（play）
@@ -117,9 +151,26 @@ y = 0.1 * np.sin(2 * np.pi * 440 * t).astype(np.float32)
 ad.play(y, blocking=True, samplerate=fs)
 ```
 
+### 5.1 输出通道映射（output mapping）
+
+用 `output_mapping`（**1-based**）把数据的每一列路由到指定的设备输出通道（可交换左右声道/只打到右声道等）：
+
+```python
+# 把单通道送到右声道（目标输出 CH2）
+ad.play(y, blocking=True, samplerate=fs, output_mapping=[2])
+```
+
 ## 6) 边播边录（playrec）
 
 ```python
+import numpy as np
+import audiodevice as ad
+
+ad.init()
+fs = 48000
+t = np.arange(fs * 1, dtype=np.float32) / fs
+y = 0.1 * np.sin(2 * np.pi * 440 * t).astype(np.float32)
+
 x = ad.playrec(y, blocking=True, samplerate=fs, in_channels=1)
 ```
 
@@ -128,6 +179,51 @@ x = ad.playrec(y, blocking=True, samplerate=fs, in_channels=1)
 ```python
 x = ad.playrec(y, blocking=True, samplerate=fs, in_channels=1, save_wav=True, wav_path="playrec.wav")
 ```
+
+### 6.1 输入/输出映射与延时（input_mapping / output_mapping / delay_time）
+
+```python
+x = ad.playrec(
+    y,
+    blocking=True,
+    samplerate=fs,
+    channels=6,                 # 采集输入通道数（会自动 >= max(input_mapping)）
+    input_mapping=[1, 3, 5],    # 1-based：返回只保留这些输入通道
+    output_mapping=[1],         # 1-based：把 y 的列路由到设备输出通道
+    delay_time=34,              # ms：窗口整体后移（对齐模式见下）
+    save_wav=True,
+    wav_path="playrec.wav",
+)
+```
+
+### 6.2 对齐模式（alignment / alignment_channel）
+
+如果你的回采里能看到激励信号（例如 chirp），可开启 `alignment=True` 用 GCC-PHAT 自动对齐窗口：
+
+```python
+x = ad.playrec(y, blocking=True, samplerate=fs, channels=6, alignment=True, alignment_channel=3)
+```
+
+参考 demo：`audiodevice_py/examples/demo_playrec.py`、`audiodevice_py/examples/demo_alignment.py`。
+
+## 6.3 stream_playrecord：带“模式”的 playrec（推荐用于验证延迟/对齐）
+
+`ad.stream_playrecord(...)` 是流式封装的阻塞式 playrec，常用于：
+
+- **delay mode**：你知道大概延迟 → 用 `delay_time` 平移窗口
+- **alignment mode**：自动对齐窗口（忽略 `delay_time`）
+
+最常见两种用法：
+
+```python
+# 1) delay mode
+x = ad.stream_playrecord(y, samplerate=fs, channels=6, delay_time=34, alignment=False, input_mapping=[3], output_mapping=[1])
+
+# 2) alignment mode（delay_time 会被忽略）
+x = ad.stream_playrecord(y, samplerate=fs, channels=6, delay_time=34, alignment=True, alignment_channel=3, input_mapping=[3], output_mapping=[1])
+```
+
+参考 demo：`audiodevice_py/examples/demo_stream_playrecord.py`、`audiodevice_py/examples/demo_delay.py`。
 
 ## 7) 长录音到磁盘（rec_long，自动分段）
 
@@ -147,6 +243,19 @@ x = ad.rec_monitor(10.0, blocking=True, save_wav=True, wav_path="rec_monitor.wav
 
 ```python
 x = ad.rec_monitor(10.0, blocking=True, monitor_channel=3, save_wav=True, wav_path="rec_monitor.wav")
+```
+
+也可以用 `output_mapping`（1-based）把监听信号路由到指定的设备输出通道：
+
+```python
+x = ad.rec_monitor(
+    10.0,
+    blocking=True,
+    monitor_channel=3,
+    output_mapping=[1],
+    save_wav=True,
+    wav_path="rec_monitor.wav",
+)
 ```
 
 ## 常见提示
@@ -182,21 +291,31 @@ import numpy as np
 import audiodevice as ad
 
 ad.init()
-ad.default.hostapi = "Windows WASAPI"
 
 chunks = []
 
 def cb(indata, outdata, frames, time_info, status):
     chunks.append(indata.copy())
 
-with ad.InputStream(samplerate=48000, channels=1, blocksize=1024, callback=cb):
+with ad.InputStream(
+    samplerate=48000,
+    channels=6,
+    blocksize=1024,
+    delay_time=200,       # ms：延迟后才开始把 indata 交给 callback
+    mapping=[1, 3, 5],    # 1-based：callback 里拿到 shape=(frames, 3)
+    callback=cb,
+):
     time.sleep(3.0)  # 采集 3 秒
 
-y = np.concatenate(chunks, axis=0) if chunks else np.zeros((0, 1), np.float32)
+y = np.concatenate(chunks, axis=0) if chunks else np.zeros((0, 3), np.float32)
 print(y.shape, y.dtype)
 ```
 
+参考 demo：`audiodevice_py/examples/demo_stream_input.py`、`audiodevice_py/examples/demo_stream_delay.py`。
+
 ### 9.2 OutputStream：流式播放（示例）
+
+参考 demo：`audiodevice_py/examples/demo_stream_output.py`、`audiodevice_py/examples/demo_stream_multithread.py`。
 
 ```python
 import time
@@ -213,7 +332,7 @@ def cb(indata, outdata, frames, time_info, status):
     outdata[:, 0] = 0.1 * np.sin(2 * np.pi * 440.0 * t)
     phase += frames
 
-with ad.OutputStream(samplerate=fs, channels=1, blocksize=1024, callback=cb):
+with ad.OutputStream(samplerate=fs, channels=2, blocksize=1024, output_mapping=[2], callback=cb):
     time.sleep(2.0)
 ```
 
@@ -229,9 +348,11 @@ def cb(indata, outdata, frames, time_info, status):
     if outdata.size and indata.size:
         outdata[:] = indata
 
-with ad.Stream(samplerate=48000, channels=(1, 1), blocksize=256, callback=cb):
+with ad.Stream(samplerate=48000, channels=(6, 2), blocksize=256, mapping=[3], output_mapping=[1], callback=cb):
     time.sleep(5.0)
 ```
+
+参考 demo：`audiodevice_py/examples/demo_stream_moniter.py`（最简全双工：麦克风直通到扬声器）。
 
 ### 9.4 如何停止、如何拿到当前 stream
 

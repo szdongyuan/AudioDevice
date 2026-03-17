@@ -32,12 +32,17 @@ ad.print_default_devices()
 
 SAMPLERATE = 48_000
 BLOCKSIZE = 1024
-CHANNELS = 2
-ROTATE_S = 10  # set to 0 to disable rotation
+ROTATE_S = 10.0  # set to 0 to disable rotation
+INPUT_MAPPING = [1, 3, 5]  # 1-based: keep these input channels (and order) in WAV
+RB_SECONDS = 8
+DEVICE = (10, 12)  # (device_in, device_out)
+DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
 
 # More stable defaults for stream demos
 ad.default.samplerate = SAMPLERATE
-ad.default.rb_seconds = 8
+ad.default.device = DEVICE
+ad.default.channels = DEFAULT_CHANNELS_NUM
+ad.default.rb_seconds = RB_SECONDS
 
 
 @dataclass
@@ -45,7 +50,7 @@ class WriterConfig:
     out_dir: Path
     samplerate: int
     channels: int
-    rotate_s: int
+    rotate_s: float
 
 
 def _open_wav(path: Path, samplerate: int, channels: int) -> wave.Wave_write:
@@ -58,7 +63,7 @@ def _open_wav(path: Path, samplerate: int, channels: int) -> wave.Wave_write:
 
 def main() -> None:
     out_dir = Path(__file__).resolve().parent
-    cfg = WriterConfig(out_dir=out_dir, samplerate=SAMPLERATE, channels=CHANNELS, rotate_s=int(ROTATE_S))
+    cfg = WriterConfig(out_dir=out_dir, samplerate=SAMPLERATE, channels=len(INPUT_MAPPING), rotate_s=float(ROTATE_S))
 
     q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=256)
     stop_ev = threading.Event()
@@ -73,12 +78,23 @@ def main() -> None:
         base_stem = base_path.stem
         base_ext = base_path.suffix or ".wav"
 
-        seg_start = time.time()
         seg_idx = 0
         next_seg_idx = 1
+        fs = int(cfg.samplerate)
+        seg_frames_written = 0
+
+        def _segment_target_frames(i: int) -> int:
+            if cfg.rotate_s <= 0:
+                return 0
+            boundary = int(round(float(i + 1) * float(cfg.rotate_s) * float(fs)))
+            return max(1, boundary - int(round(float(i) * float(cfg.rotate_s) * float(fs))))
 
         current_path = base_path
         wav = _open_wav(current_path, cfg.samplerate, cfg.channels)
+        if cfg.rotate_s > 0:
+            print(f"[writer] rotate every {cfg.rotate_s:g}s -> {current_path.name}")
+        else:
+            print(f"[writer] rotation disabled -> {current_path.name}")
         try:
             while not stop_ev.is_set():
                 try:
@@ -86,14 +102,34 @@ def main() -> None:
                 except queue.Empty:
                     blk = None
 
-                if blk is not None:
-                    pcm16 = np.clip(blk, -1.0, 1.0)
-                    pcm16 = (pcm16 * 32767.0).astype(np.int16, copy=False)
-                    wav.writeframes(pcm16.tobytes())
+                if blk is None:
+                    continue
 
-                if cfg.rotate_s > 0 and (time.time() - seg_start) >= float(cfg.rotate_s):
+                pcm16 = np.clip(blk, -1.0, 1.0)
+                pcm16 = (pcm16 * 32767.0).astype(np.int16, copy=False)
+                frames_total = int(pcm16.shape[0])
+                offset = 0
+
+                while offset < frames_total and not stop_ev.is_set():
+                    if cfg.rotate_s <= 0:
+                        wav.writeframes(pcm16[offset:, :].tobytes())
+                        break
+
+                    target_frames = _segment_target_frames(seg_idx)
+                    remaining = int(target_frames - seg_frames_written)
+                    if remaining <= 0:
+                        remaining = 1
+
+                    take = min(remaining, frames_total - offset)
+                    wav.writeframes(pcm16[offset : offset + take, :].tobytes())
+                    seg_frames_written += take
+                    offset += take
+
+                    if seg_frames_written < target_frames:
+                        continue
+
+                    # Close & rename completed segment (sample-accurate length).
                     wav.close()
-                    # Rename completed segment to timestamp-based filename.
                     seg_dt = start_dt + timedelta(seconds=float(cfg.rotate_s) * float(seg_idx))
                     seg_ts = seg_dt.strftime("%Y%m%d_%H%M%S")
                     dst = cfg.out_dir / f"{seg_ts}{base_ext}"
@@ -102,14 +138,19 @@ def main() -> None:
                     try:
                         os.replace(current_path, dst)
                     except OSError:
-                        # If rename fails (e.g. file still locked), keep the temp name.
                         pass
+                    else:
+                        print(f"[writer] rotated -> {dst.name}")
 
                     seg_idx += 1
-                    seg_start = time.time()
+                    seg_frames_written = 0
                     current_path = cfg.out_dir / f"{base_stem}_{next_seg_idx:05}{base_ext}"
                     next_seg_idx += 1
                     wav = _open_wav(current_path, cfg.samplerate, cfg.channels)
+        except Exception as e:
+            # Make writer thread failures obvious (otherwise rotation looks "unused").
+            print("[writer] error:", repr(e))
+            stop_ev.set()
         finally:
             try:
                 wav.close()
@@ -131,7 +172,17 @@ def main() -> None:
     def callback(indata, outdata, frames, time_info, status):
         # Never do blocking work here.
         try:
-            q.put_nowait(indata.copy())
+            blk = np.asarray(indata)
+            if blk.ndim == 1:
+                blk = blk[:, None]
+
+            # Ensure WAV channel count and order matches INPUT_MAPPING.
+            # If engine already applied mapping, blk.shape[1] should equal len(INPUT_MAPPING).
+            if blk.shape[1] != len(INPUT_MAPPING):
+                idx = [int(m) - 1 for m in INPUT_MAPPING]
+                blk = blk[:, idx]
+
+            q.put_nowait(blk.copy())
         except queue.Full:
             # Drop data if writer thread cannot keep up.
             pass
@@ -143,9 +194,11 @@ def main() -> None:
     try:
         with ad.InputStream(
             callback=callback,
-            channels=CHANNELS,
+            channels=ad.default.channels[0],
             samplerate=SAMPLERATE,
             blocksize=BLOCKSIZE,
+            mapping=INPUT_MAPPING,
+
         ):
             while True:
                 ad.sleep(200)

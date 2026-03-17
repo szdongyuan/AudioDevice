@@ -20,14 +20,21 @@ ad.print_default_devices()
 
 SAMPLERATE = 48_000
 BLOCKSIZE = 1024
-CHANNELS = 1
+RB_SECONDS = 8
+DEVICE = (10, 12)  # (device_in, device_out)
+DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
 DURATION_MS = 3000
 TARGET_FRAMES = int(round(SAMPLERATE * (DURATION_MS / 1000.0)))
-DELAY_MS = 200
+DELAY_MS = 0
+INPUT_MAPPING = [1, 3, 5]  # 1-based: pick these input channels
+CHANNELS = 6  # must be >= max(INPUT_MAPPING)
+SAVE_CHANNELS = len(INPUT_MAPPING)
 
-# 对 Stream demo 更稳一些（避免调度抖动导致的缓冲问题）
+# More stable defaults for stream demos
 ad.default.samplerate = SAMPLERATE
-ad.default.rb_seconds = 8
+ad.default.device = DEVICE
+ad.default.channels = DEFAULT_CHANNELS_NUM
+ad.default.rb_seconds = RB_SECONDS
 
 
 def save_wav(path: Path, data_f32: np.ndarray, samplerate: int, channels: int) -> None:
@@ -69,6 +76,7 @@ stream = ad.InputStream(
     samplerate=SAMPLERATE,
     blocksize=BLOCKSIZE,
     delay_time=int(DELAY_MS),
+    mapping=INPUT_MAPPING
 )
 stream.start()
 # 注意：sleep 只是“等待”，实际精确停止由 callback 中的 TARGET_FRAMES 控制
@@ -80,7 +88,7 @@ if chunks:
     # 双保险：截断到目标帧数，避免任何边界条件导致略长
     if data.shape[0] > TARGET_FRAMES:
         data = data[:TARGET_FRAMES]
-    save_wav(out_path, data, SAMPLERATE, CHANNELS)
+    save_wav(out_path, data, SAMPLERATE, SAVE_CHANNELS)
     dur_s = data.shape[0] / SAMPLERATE
     print(f"完成，保存 WAV: {out_path}  (frames={data.shape[0]}, duration={dur_s:.3f}s)")
 else:

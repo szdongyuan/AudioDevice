@@ -8,9 +8,15 @@ import audiodevice as ad
 
 from pathlib import Path
 
-current_file = Path(__file__).resolve()
-engine_path = current_file.parent.parent / "audiodevice.exe"
-ENGINE_EXE = str(engine_path)
+_root = Path(__file__).resolve().parent.parent
+_engine = _root / "audiodevice.exe"
+
+DURATION_S = 5
+TRY_SAMPLERATES = (48_000, 44_100, 32_000, 16_000)
+TRY_CHANNELS = (2, 1)
+PREFER_NAME_SUBSTR = ("UMC", "ASIO")
+WAV_FILENAME = "thread_asio_rec.wav"
+INIT_TIMEOUT_S = 10
 
 
 def _pick_asio_device_index(direction: str) -> int:
@@ -36,7 +42,7 @@ def _pick_asio_device_index(direction: str) -> int:
         io = "输入" if str(direction).strip().lower() == "input" else "输出"
         print(f"[warning] 未发现 ASIO {io}设备，请检查 ASIO4ALL/声卡 是否已选择对应通道")
         return -1
-    for prefer in ("UMC", "ASIO"):
+    for prefer in PREFER_NAME_SUBSTR:
         for d in candidates:
             name = str(d.get("name", "") or "")
             if prefer.lower() in name.lower():
@@ -50,14 +56,13 @@ def _try_rec_asio(
 ) -> Tuple[Optional[object], Optional[Exception]]:
     # Try common sr/ch pairs. ASIO devices tend to like 48k.
     # device_in is device index (int only); device names are not supported.
-    duration_seconds = 5
     tried = []
     last_err: Optional[Exception] = None
-    for sr in (48_000, 44_100, 32_000, 16_000):
-        for ch in (2, 1):
+    for sr in TRY_SAMPLERATES:
+        for ch in TRY_CHANNELS:
             tried.append((sr, ch))
             try:
-                frames = sr * duration_seconds
+                frames = int(sr) * int(DURATION_S)
                 y = ad.rec(
                     frames,
                     blocking=True,
@@ -75,7 +80,7 @@ def _try_rec_asio(
 
 def worker_record_asio() -> None:
     out_dir = os.path.dirname(__file__)
-    wav_path = os.path.join(out_dir, "thread_asio_rec.wav")
+    wav_path = os.path.join(out_dir, WAV_FILENAME)
 
     try:
         device_in = _pick_asio_device_index("input")
@@ -104,14 +109,11 @@ def worker_record_asio() -> None:
 
 
 def main() -> None:
-    # Auto start the Rust engine.
-    ad.default.auto_start = True
-    if engine_path.is_file():
-        ad.default.engine_exe = ENGINE_EXE
-        ad.default.engine_cwd = os.path.dirname(ENGINE_EXE)
-
     # Ensure engine and device list are ready (needed for _pick_asio_device_index).
-    ad.init()
+    if _engine.is_file():
+        ad.init(engine_exe=str(_engine), engine_cwd=str(_root), timeout=int(INIT_TIMEOUT_S))
+    else:
+        ad.init(timeout=int(INIT_TIMEOUT_S))
 
     # We want to demonstrate ASIO in a background thread. hostapi is read-only; set device to an ASIO device.
     idx = _pick_asio_device_index("input")

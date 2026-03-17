@@ -22,32 +22,37 @@ else:
     ad.init(timeout=10)
 ad.print_default_devices()
 
-SAMPLERATE = 44100
+SAMPLERATE = 48000
+BLOCKSIZE = 1024
+RB_SECONDS = 8
+DEVICE = (10, 12)  # (device_in, device_out)
+DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
+
+# More stable defaults for stream demos
+ad.default.samplerate = SAMPLERATE
+ad.default.device = DEVICE
+ad.default.channels = DEFAULT_CHANNELS_NUM
+ad.default.rb_seconds = RB_SECONDS
+
 DURATION_S = 3.0
 # Chirp 参数（线性扫频：f0 -> f1）
 CHIRP_F0 = 200.0
 CHIRP_F1 = 8000.0
 VOLUME = 0.1
-OUT_CH = 2
-IN_CH = 1
+IN_CH = 6
 
 # 选择一种“窗口定位方式”（二选一）。
 # - "delay": 你知道大致延迟 -> 用 delay_time 把返回的 3s 窗口往后移
 # - "alignment": 回采里确实能看到刺激信号 -> 用 GCC-PHAT 自动对齐（忽略 delay_time）
-MODE = "delay"
+MODE = "alignment"
 
 DELAY_MS = 34
-ALIGNMENT_CH = 1  # 1-based, used when MODE="alignment"
-INPUT_MAPPING = [1]  # 1-based: keep these input channels in returned recording
+ALIGNMENT_CH = 3  # 1-based, used when MODE="alignment"
+INPUT_MAPPING = [3]  # 1-based: keep these input channels in returned recording
 # 输出通道映射（1-based）：把 y 的每一列路由到指定的设备输出通道。
 # 例如 [2,1] 表示交换左右声道；[2] 表示把单通道送到右声道。
-OUTPUT_MAPPING = [1, 2]
-
-# 更稳一些（避免调度抖动导致的缓冲问题）
-ad.default.samplerate = SAMPLERATE
-ad.default.device = (15,17)
-ad.default.channels = (1,2)
-print(ad.default.device)
+OUTPUT_MAPPING = [1]
+OUT_CH = len(OUTPUT_MAPPING)
 
 
 def main() -> None:
@@ -79,7 +84,7 @@ def main() -> None:
             y,
             samplerate=fs,
             channels=int(IN_CH),
-            blocksize=1024,
+            blocksize=BLOCKSIZE,
             delay_time=float(DELAY_MS),
             alignment=False,
             input_mapping=INPUT_MAPPING,
@@ -97,7 +102,7 @@ def main() -> None:
             y,
             samplerate=fs,
             channels=int(IN_CH),
-            blocksize=1024,
+            blocksize=BLOCKSIZE,
             delay_time=float(DELAY_MS),  # will be ignored in alignment mode
             alignment=True,
             alignment_channel=int(ALIGNMENT_CH),

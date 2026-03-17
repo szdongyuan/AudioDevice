@@ -1,7 +1,9 @@
 # audiodevice Engine Package (Windows) — User Notes
 
 This ZIP contains the **engine executable** used by the `audiodevice` Python package.
-Most users do **not** need to run the EXE manually — the Python SDK can start it automatically.
+Most users do **not** need to run the EXE manually — the Python SDK starts it automatically.
+
+> If your `audiodevice-*.whl` already bundles the engine, you usually don’t need this ZIP.
 
 ## What’s inside
 
@@ -10,9 +12,14 @@ Most users do **not** need to run the EXE manually — the Python SDK can start 
 - `README_ENGINE.md` (this file)
 - `API_USAGE.md` (how to use the Python SDK)
 
-## Setup: use environment variable to point to this ZIP
+## Quick setup (recommended): point the SDK to this ZIP
 
-The Python SDK finds the engine by reading the `AUDIODEVICE_ENGINE_URL` environment variable. Follow the steps below.
+The Python SDK finds the engine by reading the `AUDIODEVICE_ENGINE_URL` environment variable.
+
+Supported values:
+
+- A **local file path** to an engine `.zip` / `.exe`
+- An **HTTP(S) URL** ending with `.zip` / `.exe`
 
 ### Step 1 — Install the Python SDK wheel
 
@@ -20,7 +27,7 @@ The Python SDK finds the engine by reading the `AUDIODEVICE_ENGINE_URL` environm
 python -m pip install C:\path\to\audiodevice-<version>-py3-none-any.whl
 ```
 
-### Step 2 — Put this ZIP in a fixed folder
+### Step 2 — Put this ZIP in a fixed folder (for local-path usage)
 
 1. Choose a folder you won’t delete (e.g. `C:\tools\audiodevice`).
 2. In **PowerShell**, create the folder and copy the ZIP (replace paths with your actual download location and ZIP name):
@@ -32,11 +39,17 @@ copy "C:\YourDownloads\audiodevice_engine_win64_xxx.zip" "C:\tools\audiodevice\"
 
 3. Note the **full path** to the ZIP (e.g. `C:\tools\audiodevice\audiodevice_engine_win64_20260305.zip`). You’ll need it for the next step.
 
-### Step 3 — Add the environment variable `AUDIODEVICE_ENGINE_URL` (permanent, set once)
+### Step 3 — Set `AUDIODEVICE_ENGINE_URL`
 
-The variable tells the SDK where the engine ZIP is. Set it **permanently** using one of the methods below so you don’t need to configure it again.
+You can set it **temporarily** (current terminal) or **permanently** (set once).
 
-- **Using the GUI**  
+- **Temporary (current PowerShell only)**:
+
+```powershell
+$env:AUDIODEVICE_ENGINE_URL="C:\tools\audiodevice\audiodevice_engine_win64_xxx.zip"
+```
+
+- **Permanent (GUI)**  
   1. Press `Win + R`, type `sysdm.cpl`, press Enter to open System Properties.  
   2. Open the **Advanced** tab → click **Environment Variables**.  
   3. Under **User variables** (or System variables), click **New**.  
@@ -44,7 +57,7 @@ The variable tells the SDK where the engine ZIP is. Set it **permanently** using
   5. Variable value: the full path to the ZIP (e.g. `C:\tools\audiodevice\audiodevice_engine_win64_20260305.zip`).  
   6. OK to save. **New** PowerShell or Command Prompt windows will see the variable; close and reopen any already-open terminals.
 
-- **Using PowerShell (permanent user variable)**  
+- **Permanent (PowerShell user variable)**  
   In PowerShell (replace with your actual ZIP path):
 
 ```powershell
@@ -53,7 +66,7 @@ The variable tells the SDK where the engine ZIP is. Set it **permanently** using
 
 Then open a **new** PowerShell window before running Python.
 
-### Step 4 — Optional: SHA256 verification
+### Step 4 — Optional: SHA256 verification (`AUDIODEVICE_ENGINE_SHA256`)
 
 If you were given a SHA256 for the engine ZIP, you can set it permanently so the SDK verifies the archive before use:
 
@@ -74,10 +87,22 @@ No need to extract the ZIP there yourself.
 ### Step 6 — Quick test
 
 ```powershell
-python -c "import audiodevice as ad; ad.init(); print(ad.query_backends())"
+python -c "import audiodevice as ad; ad.init(); print(ad.query_backends()); print(ad.query_devices())"
 ```
 
-If you see a list of backends, the engine is working.
+If you see a backend list and a device list, the engine is working.
+
+---
+
+## Alternatives (no env var)
+
+- Put `audiodevice.exe` on `PATH` (then `ad.init()` can find it)
+- Or set the path in code:
+
+```python
+import audiodevice as ad
+ad.init(engine_exe=r"C:\tools\audiodevice\audiodevice.exe", engine_cwd=r"C:\tools\audiodevice")
+```
 
 ---
 

@@ -1,34 +1,42 @@
-import audiodevice as ad
-import numpy as np
 import os
 
 from pathlib import Path
 
-current_file = Path(__file__).resolve()
-engine_path = current_file.parent.parent / "audiodevice.exe"
-ENGINE_EXE = str(engine_path)
+import numpy as np
+
+import audiodevice as ad
+
+_root = Path(__file__).resolve().parent.parent
+_engine = _root / "audiodevice.exe"
+if _engine.is_file():
+    ad.init(engine_exe=str(_engine), engine_cwd=str(_root), timeout=10)
+else:
+    ad.init(timeout=10)
+ad.print_default_devices()
+
+SAMPLERATE = 48_000
+DURATION_S = 3.0
+DELAY_MS = 200
+INPUT_CHANNELS_NUM = 6
+INPUT_MAPPING = [1, 3, 5]  # 1-based
+WAV_PATH = os.path.join(os.path.dirname(__file__), "rec88888.wav")
+DEVICE = (10, 12)  # (device_in, device_out)
+DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
+
+ad.default.samplerate = SAMPLERATE
+ad.default.device = DEVICE
+ad.default.channels = DEFAULT_CHANNELS_NUM
 
 def main() -> None:
-    ad.default.auto_start = True
-    if engine_path.is_file():
-        ad.default.engine_exe = ENGINE_EXE
-        ad.default.engine_cwd = os.path.dirname(ENGINE_EXE)
-
-    # hostapi is read-only; it follows from default.device
-    ad.default.samplerate = 48_000
-    ad.default.device = (14,18)
-    ad.default.channels = (6,2)
-
-    delay_ms = 200
-    wav_path = os.path.join(os.path.dirname(__file__), "rec88888.wav")
+    frames = int(round(float(SAMPLERATE) * float(DURATION_S)))
     y = ad.rec(
-        48000 * 3,
+        frames,
         blocking=True,
-        wav_path=wav_path,
+        wav_path=WAV_PATH,
         save_wav=True,
-        channels=6,
-        delay_time=delay_ms,
-        mapping=[1,3,6]
+        channels=INPUT_CHANNELS_NUM,
+        delay_time=DELAY_MS,
+        mapping=INPUT_MAPPING,
     )
     print("recorded:", y.shape, y.dtype, "min/max:", float(y.min()), float(y.max()))
 

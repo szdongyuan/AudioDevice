@@ -22,6 +22,26 @@ import numpy as np
 
 import audiodevice as ad
 
+_root = Path(__file__).resolve().parent.parent
+_engine = _root / "audiodevice.exe"
+if _engine.is_file():
+    ad.init(engine_exe=str(_engine), engine_cwd=str(_root), timeout=10)
+else:
+    ad.init(timeout=10)
+ad.print_default_devices()
+
+SAMPLERATE = 48_000
+DURATION_S = 2.0
+OUT_CH = 2
+IN_CH = 1
+DELAY_MS = 500
+EVENT_MS = 1000
+RB_SECONDS = 8
+
+# More stable defaults for stream-ish demos
+ad.default.samplerate = SAMPLERATE
+ad.default.rb_seconds = RB_SECONDS
+
 
 def _peak_index(x: np.ndarray) -> int:
     x = np.asarray(x)
@@ -41,40 +61,13 @@ def _to_mono(x: np.ndarray) -> np.ndarray:
 
 
 def main() -> None:
-    # 初始化引擎（跟其他 demo 一致）
-    _root = Path(__file__).resolve().parent.parent
-    _engine = _root / "audiodevice.exe"
-    if _engine.is_file():
-        ad.init(engine_exe=str(_engine), engine_cwd=str(_root), timeout=10)
-    else:
-        ad.init(timeout=10)
-
-    ad.print_default_devices()
-
-    FS = 48_000
-    DURATION_S = 2.0
-    OUT_CH = 2
-    IN_CH = 1
-
-    # 你要验证的延时（ms）
-    DELAY_MS = 500
-
-    # 事件点（ms）：放在靠后一点，避免被 delay_time 截掉
-    EVENT_MS = 1000
-
-    ad.default.samplerate = FS
-    ad.default.rb_seconds = 8
-    # 如需固定设备请取消注释：
-    # ad.default.device = (in_idx, out_idx)
-    # ad.default.channels = (IN_CH, OUT_CH)
-
-    n = int(round(DURATION_S * FS))
+    n = int(round(float(DURATION_S) * float(SAMPLERATE)))
     y = np.zeros((n,), dtype=np.float32)
 
     # 用一个短 burst 作为事件点（比单 sample 脉冲更抗噪）
-    event_i = int(round(EVENT_MS * FS / 1000.0))
-    burst_len = int(round(0.01 * FS))  # 10ms
-    t = np.arange(burst_len, dtype=np.float32) / FS
+    event_i = int(round(float(EVENT_MS) * float(SAMPLERATE) / 1000.0))
+    burst_len = int(round(0.01 * float(SAMPLERATE)))  # 10ms
+    t = np.arange(burst_len, dtype=np.float32) / float(SAMPLERATE)
     burst = (0.8 * np.sin(2 * np.pi * 2000.0 * t)).astype(np.float32)
     end_i = min(n, event_i + burst_len)
     y[event_i:end_i] = burst[: max(0, end_i - event_i)]
@@ -84,35 +77,35 @@ def main() -> None:
     else:
         y_play = y
 
-    print(f"FS={FS}, duration={DURATION_S:.3f}s, event={EVENT_MS}ms, delay={DELAY_MS}ms")
+    print(f"FS={SAMPLERATE}, duration={DURATION_S:.3f}s, event={EVENT_MS}ms, delay={DELAY_MS}ms")
 
     print("第 1 次：delay_time=0（baseline）")
     x0 = ad.playrec(
         y_play,
         blocking=True,
-        samplerate=FS,
+        samplerate=SAMPLERATE,
         channels=IN_CH,
         delay_time=0,
         save_wav=False,
     )
     i0 = _peak_index(x0)
-    print(f"baseline peak @ {i0} samples -> {i0 * 1000.0 / FS:.2f} ms")
+    print(f"baseline peak @ {i0} samples -> {i0 * 1000.0 / SAMPLERATE:.2f} ms")
 
     print(f"第 2 次：delay_time={DELAY_MS}ms")
     x1 = ad.playrec(
         y_play,
         blocking=True,
-        samplerate=FS,
+        samplerate=SAMPLERATE,
         channels=IN_CH,
         delay_time=DELAY_MS,
         save_wav=False,
     )
     i1 = _peak_index(x1)
-    print(f"delayed  peak @ {i1} samples -> {i1 * 1000.0 / FS:.2f} ms")
+    print(f"delayed  peak @ {i1} samples -> {i1 * 1000.0 / SAMPLERATE:.2f} ms")
 
     # 关键：比较两次事件点位置差，理论上约等于 DELAY_MS（单位 ms）
     shift_samples = i0 - i1
-    shift_ms = shift_samples * 1000.0 / FS
+    shift_ms = shift_samples * 1000.0 / SAMPLERATE
     print(f"observed shift: {shift_samples} samples -> {shift_ms:.2f} ms (expected ~{DELAY_MS} ms)")
 
     # 可选：保存一下两次录音便于目视检查
@@ -136,21 +129,21 @@ def main() -> None:
     x1m = _to_mono(x1)
     peak0 = int(i0)
     peak1 = int(i1)
-    win = int(round(0.06 * FS))  # 取峰值前后 60ms 便于观察
+    win = int(round(0.06 * SAMPLERATE))  # 取峰值前后 60ms 便于观察
     a0 = max(0, peak0 - win)
     b0 = min(len(x0m), peak0 + win)
     a1 = max(0, peak1 - win)
     b1 = min(len(x1m), peak1 + win)
 
-    t0 = (np.arange(a0, b0) - peak0) * 1000.0 / FS
-    t1 = (np.arange(a1, b1) - peak1) * 1000.0 / FS
+    t0 = (np.arange(a0, b0) - peak0) * 1000.0 / SAMPLERATE
+    t1 = (np.arange(a1, b1) - peak1) * 1000.0 / SAMPLERATE
 
     fig = plt.figure(figsize=(10, 7), dpi=140)
     ax1 = fig.add_subplot(2, 1, 1)
-    ax1.plot(np.arange(len(x0m)) * 1000.0 / FS, x0m, lw=0.8, label="baseline (delay=0)")
-    ax1.plot(np.arange(len(x1m)) * 1000.0 / FS, x1m, lw=0.8, alpha=0.8, label=f"delayed (delay={DELAY_MS}ms)")
-    ax1.axvline(peak0 * 1000.0 / FS, color="C0", ls="--", lw=1.0)
-    ax1.axvline(peak1 * 1000.0 / FS, color="C1", ls="--", lw=1.0)
+    ax1.plot(np.arange(len(x0m)) * 1000.0 / SAMPLERATE, x0m, lw=0.8, label="baseline (delay=0)")
+    ax1.plot(np.arange(len(x1m)) * 1000.0 / SAMPLERATE, x1m, lw=0.8, alpha=0.8, label=f"delayed (delay={DELAY_MS}ms)")
+    ax1.axvline(peak0 * 1000.0 / SAMPLERATE, color="C0", ls="--", lw=1.0)
+    ax1.axvline(peak1 * 1000.0 / SAMPLERATE, color="C1", ls="--", lw=1.0)
     ax1.set_title(f"playrec delay compare (observed shift ≈ {shift_ms:.2f} ms, expected ≈ {DELAY_MS} ms)")
     ax1.set_xlabel("time (ms)")
     ax1.set_ylabel("amp (mono ch0)")

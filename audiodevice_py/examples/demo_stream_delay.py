@@ -20,6 +20,26 @@ import numpy as np
 
 import audiodevice as ad
 
+_root = Path(__file__).resolve().parent.parent
+_engine = _root / "audiodevice.exe"
+if _engine.is_file():
+    ad.init(engine_exe=str(_engine), engine_cwd=str(_root), timeout=10)
+else:
+    ad.init(timeout=10)
+ad.print_default_devices()
+
+SAMPLERATE = 48_000
+CHANNELS = 1
+BLOCKSIZE = 1024
+DURATION_MS = 1500
+DELAY_MS = 500
+REPEATS = 5
+RB_SECONDS = 8
+
+# More stable defaults for stream demos
+ad.default.samplerate = SAMPLERATE
+ad.default.rb_seconds = RB_SECONDS
+
 
 def run_once(*, delay_ms: int, samplerate: int, channels: int, blocksize: int, duration_ms: int):
     target_frames = int(round(samplerate * (duration_ms / 1000.0)))
@@ -86,29 +106,11 @@ def run_once(*, delay_ms: int, samplerate: int, channels: int, blocksize: int, d
 
 
 def main() -> None:
-    # 初始化引擎（跟其他 demo 一致）
-    _root = Path(__file__).resolve().parent.parent
-    _engine = _root / "audiodevice.exe"
-    if _engine.is_file():
-        ad.init(engine_exe=str(_engine), engine_cwd=str(_root), timeout=10)
-    else:
-        ad.init(timeout=10)
-
-    ad.print_default_devices()
-
-    FS = 48_000
-    CHANNELS = 1
-    BLOCKSIZE = 1024
-    DURATION_MS = 1500
-    DELAY_MS = 500
-    REPEATS = 5
-
-    # 对 Stream demo 更稳一些（避免调度抖动导致的缓冲问题）
-    ad.default.samplerate = FS
-    ad.default.rb_seconds = 8
-
     print("Stream delay test (InputStream callback timing)")
-    print(f"FS={FS}, blocksize={BLOCKSIZE}, duration={DURATION_MS}ms, test_delay={DELAY_MS}ms, repeats={REPEATS}")
+    print(
+        f"FS={SAMPLERATE}, blocksize={BLOCKSIZE}, duration={DURATION_MS}ms, "
+        f"test_delay={DELAY_MS}ms, repeats={REPEATS}"
+    )
 
     first0 = []
     first1 = []
@@ -117,14 +119,14 @@ def main() -> None:
     for k in range(int(REPEATS)):
         r0 = run_once(
             delay_ms=0,
-            samplerate=FS,
+            samplerate=SAMPLERATE,
             channels=CHANNELS,
             blocksize=BLOCKSIZE,
             duration_ms=DURATION_MS,
         )
         r1 = run_once(
             delay_ms=DELAY_MS,
-            samplerate=FS,
+            samplerate=SAMPLERATE,
             channels=CHANNELS,
             blocksize=BLOCKSIZE,
             duration_ms=DURATION_MS,

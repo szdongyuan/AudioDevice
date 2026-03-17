@@ -27,14 +27,21 @@ ad.print_default_devices()
 
 SAMPLERATE = 48_000
 BLOCKSIZE = 1024
-CHANNELS = 2
+DEVICE_OUT_CHANNELS = 2
+OUT_MAPPING = [1]  # 1-based: route callback channels into device output channels
+CALLBACK_CHANNELS = len(OUT_MAPPING)
 DURATION_S = 4.0
-F_START_HZ = 200.0
+F_START_HZ = 1000.0
 F_END_HZ = 3000.0
+RB_SECONDS = 8
+DEVICE = (10, 12) 
+DEFAULT_CHANNELS_NUM = (6, 2)
 
 # More stable defaults for stream demos
 ad.default.samplerate = SAMPLERATE
-ad.default.rb_seconds = 8
+ad.default.rb_seconds = RB_SECONDS
+ad.default.device = DEVICE
+ad.default.channels = DEFAULT_CHANNELS_NUM
 
 
 def main() -> None:
@@ -66,22 +73,25 @@ def main() -> None:
                 phase = c * (np.power(k, t / T) - 1.0)
 
             block = (vol * np.sin(phase)).astype(np.float32)
-            block = np.stack([block] * CHANNELS, axis=1)  # (frames, ch)
-            sample_pos += int(BLOCKSIZE)
+            block = np.repeat(block[:, None], repeats=CALLBACK_CHANNELS, axis=1)  # (frames, callback_ch)
 
             try:
                 q.put(block, timeout=0.1)
             except queue.Full:
-                # Drop the block if consumer is too slow.
+                # If consumer is too slow, don't advance phase/time (keeps perceived duration correct).
+                # Back off a bit and try again.
+                time.sleep(dt * 0.25)
                 continue
 
+            # Advance time only when we successfully enqueue audio.
+            sample_pos += int(BLOCKSIZE)
             block_count += 1
             if block_count % 20 == 0:
                 print(f"  [生产者线程] 已产生 {block_count} 块, sample_pos={sample_pos}")
 
             # Producer pacing. The callback itself is paced by the stream loop,
             # but we also pace the producer to avoid queue overflow.
-            time.sleep(dt * 0.9)
+            time.sleep(dt)
 
     def callback(indata, outdata, frames, time_info, status):
         try:
@@ -100,9 +110,10 @@ def main() -> None:
     started = time.time()
     with ad.OutputStream(
         callback=callback,
-        channels=CHANNELS,
+        channels=DEVICE_OUT_CHANNELS,
         samplerate=SAMPLERATE,
         blocksize=BLOCKSIZE,
+        mapping=OUT_MAPPING,
     ):
         # Keep the stream running; main thread could change params["volume"] if needed.
         last_print = 0.0

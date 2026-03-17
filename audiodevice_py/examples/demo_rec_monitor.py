@@ -3,39 +3,29 @@ import os
 import audiodevice as ad
 
 from pathlib import Path
-from typing import Optional
 
-current_file = Path(__file__).resolve()
-engine_path = current_file.parent.parent / "audiodevice.exe"
-ENGINE_EXE = str(engine_path)
+_root = Path(__file__).resolve().parent.parent
+_engine = _root / "audiodevice.exe"
+if _engine.is_file():
+    ad.init(engine_exe=str(_engine), engine_cwd=str(_root), timeout=10)
+else:
+    ad.init(timeout=10)
+ad.print_default_devices()
 
+SAMPLERATE = 48000
+DURATION_S = 10.0
+MONITOR_CH = 3  # 1-based
+OUTPUT_MAPPING = [1]  # 1-based
+WAV_PATH = os.path.join(os.path.dirname(__file__), "rec_monitor.wav")
+DEVICE = (10, 12)  # (device_in, device_out)
+DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
 
-def _pick_device(devs: list[dict], prefer: list[str]) -> str:
-    for p in prefer:
-        p_lc = p.lower()
-        for d in devs:
-            name = str(d.get("name", ""))
-            if p_lc in name.lower():
-                return name
-    return ""
+ad.default.samplerate = SAMPLERATE
+ad.default.device = DEVICE
+ad.default.channels = DEFAULT_CHANNELS_NUM
 
 
 def main() -> None:
-    ad.default.auto_start = True
-    if engine_path.is_file():
-        ad.default.engine_exe = ENGINE_EXE
-        ad.default.engine_cwd = os.path.dirname(ENGINE_EXE)
-
-    wav_path = os.path.join(os.path.dirname(__file__), "rec_monitor.wav")
-    # 选择要监听的输入通道（1-based）：1=CH1, 2=CH2...
-    # 多通道声卡常见场景：你可能只想听某一路输入，而不是总听 CH1。
-    MONITOR_CH = 1
-    OUTPUT_MAPPING = [1,3]  # 1-based：例如把监听信号送到右声道（仅该声道有声）
-
-    # Same style as demo_rec.py. device_in / device_out accept only int. hostapi is read-only (follows from device_in/device_out).
-    ad.default.samplerate = 44100
-    ad.default.channels = (1,2)
-    ad.default.device = (15, 17)   
     IN_CH = int(ad.default.channels.input or 1)
 
     print("hostapi:", ad.default.hostapi)
@@ -44,16 +34,16 @@ def main() -> None:
     print("device:", ad.default.device)
 
     x = ad.rec_monitor(
-        10.0,  # seconds
+        DURATION_S,
         save_wav=True,
-        wav_path=wav_path,
+        wav_path=WAV_PATH,
         blocking=True,
         monitor_channel=MONITOR_CH,
         output_mapping=OUTPUT_MAPPING,
-        samplerate=44100,
+        samplerate=SAMPLERATE,
         channels=IN_CH,
     )
-    print("captured:", x.shape, x.dtype, "wav:", wav_path)
+    print("captured:", x.shape, x.dtype, "wav:", WAV_PATH)
 
 if __name__ == "__main__":
     main()

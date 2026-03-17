@@ -8,6 +8,7 @@ import threading
 import time
 import wave
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
@@ -2863,8 +2864,6 @@ def stream_playrecord(
     blocksize: int = 1024,
     delay_time: float = 0,
     drain_time: float = 0,
-    auto_window: bool = False,
-    auto_window_channel: int = 1,
     return_full: bool = False,
     alignment: bool = False,
     alignment_channel: int = 1,
@@ -2890,11 +2889,6 @@ def stream_playrecord(
             - delay_time > 0: window shifts later
             - delay_time < 0: window starts earlier (pre-roll)
         drain_time: Deprecated for `stream_playrecord()` and ignored (kept for backward compatibility).
-        auto_window: If True, ignore delay-based windowing and instead select the window of
-            length `len(data)` with maximum energy (RMS) from the recorded stream.
-            This is useful when the true playback-to-capture latency is unknown (e.g. microphone path).
-        auto_window_channel: 1-based channel index (in the captured stream) used for energy scoring
-            when auto_window=True.
         return_full: If True, return the full captured recording (including any lead-in and tail),
             without delay/alignment windowing. This is useful for debugging latency and truncation.
         alignment: If True, align recorded audio to stimulus using GCC-PHAT (see alignment_processing).
@@ -2991,15 +2985,10 @@ def stream_playrecord(
         raise ValueError("save_wav=True requires wav_path")
     wav_path_abs = os.path.abspath(wav_path) if (save_wav and wav_path) else ""
 
-    if bool(alignment) and bool(auto_window):
-        raise ValueError("alignment and auto_window are mutually exclusive (pick one)")
-    if bool(return_full) and bool(auto_window):
-        raise ValueError("return_full and auto_window are mutually exclusive (pick one)")
-
     # Engine-driven playrec drains to EOF; drain_time is not needed here (deprecated).
     delay_ms = 0.0 if delay_time is None else float(delay_time)
 
-    if return_full or auto_window:
+    if return_full:
         rec_full = _playrec_engine(
             y_out0,
             wav_path="",
@@ -3022,37 +3011,9 @@ def stream_playrecord(
             rec_full = rec_full[:, None]
         rec_full = rec_full[:, in_map_cols] if in_map_cols is not None else rec_full
 
-        if return_full:
-            if save_wav and wav_path_abs:
-                _write_wav_from_float32(wav_path_abs, rec_full, int(fs))
-            return rec_full.astype(np.float32, copy=False)
-
-        win = int(frames_i)
-        if win <= 0:
-            x = rec_full
-        else:
-            ci = int(auto_window_channel) - 1
-            if ci < 0:
-                ci = 0
-            if rec_full.ndim != 2 or int(rec_full.shape[1]) <= 0:
-                ci = 0
-            elif ci >= int(rec_full.shape[1]):
-                ci = int(rec_full.shape[1]) - 1
-
-            if rec_full.shape[0] < win:
-                pad = np.zeros((win - rec_full.shape[0], rec_full.shape[1]), dtype=np.float32)
-                rec_full = np.concatenate([rec_full, pad], axis=0)
-
-            ref = rec_full[:, ci].astype(np.float32, copy=False)
-            s2 = ref * ref
-            cs = np.concatenate([np.zeros((1,), dtype=np.float64), np.cumsum(s2, dtype=np.float64)])
-            n_start = int(ref.shape[0] - win + 1)
-            start = 0 if n_start <= 1 else int(np.argmax(cs[win:] - cs[:-win]))
-            x = rec_full[start : start + win, :]
-
         if save_wav and wav_path_abs:
-            _write_wav_from_float32(wav_path_abs, x, int(fs))
-        return x.astype(np.float32, copy=False)
+            _write_wav_from_float32(wav_path_abs, rec_full, int(fs))
+        return rec_full.astype(np.float32, copy=False)
 
     x_full = _playrec_engine(
         y_out0,
@@ -3699,6 +3660,7 @@ class OutputStream(_StreamBase):
         blocksize: int = 0,
         latency=None,
         channels=None,
+        mapping=None,
         output_mapping=None,
         callback=None,
     ) -> None:
@@ -3709,10 +3671,23 @@ class OutputStream(_StreamBase):
             blocksize: Frames per callback; 0 uses default.
             latency: Compatibility arg.
             channels: Output channel count played by the device.
+            mapping: Alias for output_mapping (sounddevice-compatible name). 1-based output channel
+                mapping applied after callback. Requires channels >= max(mapping). Callback outdata
+                has shape (frames, len(mapping)).
             output_mapping: 1-based output channel mapping applied after callback. Requires
                 channels >= max(output_mapping). Callback outdata has shape (frames, len(output_mapping)).
             callback: Callback signature (indata, outdata, frames, time_info, status).
         """
+        # For OutputStream, sounddevice uses `mapping` to mean output mapping.
+        if mapping is not None:
+            mapping = list(mapping)
+        if output_mapping is not None:
+            output_mapping = list(output_mapping)
+        if output_mapping is None:
+            output_mapping = mapping
+        elif mapping is not None and mapping != output_mapping:
+            raise TypeError("Provide only one of mapping or output_mapping")
+
         super().__init__(
             kind="output",
             samplerate=samplerate,
