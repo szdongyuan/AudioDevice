@@ -18,22 +18,47 @@ pub enum Cmd {
     },
 
     #[serde(rename = "session_start")]
-    SessionStart { #[serde(flatten)] params: SessionParams },
+    SessionStart {
+        #[serde(default)]
+        session_id: String,
+        #[serde(flatten)]
+        params: SessionParams,
+    },
 
     #[serde(rename = "session_stop")]
-    SessionStop {},
+    SessionStop {
+        #[serde(default)]
+        session_id: String,
+    },
+
+    #[serde(rename = "session_stop_all")]
+    SessionStopAll {},
 
     #[serde(rename = "status")]
-    Status {},
+    Status {
+        #[serde(default)]
+        session_id: String,
+    },
 
     #[serde(rename = "capture_read")]
-    CaptureRead { max_frames: usize },
+    CaptureRead {
+        #[serde(default)]
+        session_id: String,
+        max_frames: usize,
+    },
 
     #[serde(rename = "play_write")]
-    PlayWrite { pcm16_b64: String },
+    PlayWrite {
+        #[serde(default)]
+        session_id: String,
+        pcm16_b64: String,
+    },
 
     #[serde(rename = "play_finish")]
-    PlayFinish {},
+    PlayFinish {
+        #[serde(default)]
+        session_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -97,6 +122,7 @@ pub struct DeviceListReply<T> {
 #[derive(Debug, Serialize)]
 pub struct SessionStartReply {
     pub msg: String,
+    pub session_id: String,
 }
 
 #[derive(Debug, Serialize)]

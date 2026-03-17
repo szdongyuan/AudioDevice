@@ -145,6 +145,16 @@ _GLOBAL_SESSION_DONE: Optional[threading.Event] = None
 _GLOBAL_SESSION_ERROR: Optional[BaseException] = None
 _GLOBAL_STREAM: Optional[object] = None
 
+_SESSION_ID_COUNTER = 0
+_SESSION_ID_LOCK = threading.Lock()
+
+
+def _next_session_id() -> str:
+    global _SESSION_ID_COUNTER
+    with _SESSION_ID_LOCK:
+        _SESSION_ID_COUNTER += 1
+        return f"py-{_SESSION_ID_COUNTER}"
+
 
 class DeviceList(list):
     """A list of device dicts with an audiodevice-like repr()."""
@@ -1111,11 +1121,12 @@ class RecordingHandle:
     samplerate: int
     _proc: Optional[subprocess.Popen]
     _client: AudioDeviceClient
+    _session_id: str = ""
 
     def stop(self) -> None:
         """Stop the recording session and close underlying resources."""
         try:
-            self._client.request({"cmd": "session_stop"})
+            self._client.request({"cmd": "session_stop", "session_id": self._session_id})
         finally:
             self._client.close()
             if self._proc is not None:
@@ -1134,7 +1145,7 @@ class RecordingHandle:
             tuple[np.ndarray, bool]: `(audio, eof)` where `audio` is float32 shaped
             `(frames, channels)` and `eof` indicates the engine ended the stream.
         """
-        data = self._client.request({"cmd": "capture_read", "max_frames": int(max_frames)})
+        data = self._client.request({"cmd": "capture_read", "session_id": self._session_id, "max_frames": int(max_frames)})
         pcm16 = base64.b64decode(data["pcm16_b64"])
         frames = int(data["frames"])
         ch = int(data["channels"])
@@ -1275,16 +1286,13 @@ def rec_monitor(
     )
     backend_eff, engine_hostapi, _ = _hostapi_display_to_engine(hostapi_eff)
 
+    session_id = _next_session_id()
     c = AudioDeviceClient(default.host, default.port, timeout=default.timeout)
     fs = fs0
     ch = ch0
     tried = []
     last_err: Optional[Exception] = None
 
-    # Build a robust sample-rate candidate list:
-    # - Prefer the user's requested/default samplerate (fs0)
-    # - Then try the selected input device's reported default samplerate (if available)
-    # - Then fall back to common rates
     dev_default_sr: Optional[int] = None
     try:
         hostapis_order, _ = _hostapis_all()
@@ -1350,6 +1358,7 @@ def rec_monitor(
                 try:
                     req = {
                         "cmd": "session_start",
+                        "session_id": session_id,
                         "backend": backend_eff,
                         "hostapi": engine_hostapi,
                         "mode": "monitor_record",
@@ -1391,6 +1400,7 @@ def rec_monitor(
         samplerate=fs,
         _proc=proc,
         _client=c,
+        _session_id=session_id,
     )
 
     if blocking:
@@ -1411,9 +1421,8 @@ def rec_monitor(
                     break
                 time.sleep(0.005)
 
-            # Stop the session, then drain remaining capture briefly (best-effort).
             try:
-                c.request({"cmd": "session_stop"})
+                c.request({"cmd": "session_stop", "session_id": session_id})
             except Exception:
                 pass
 
@@ -1569,10 +1578,12 @@ def _rec_engine(
     )
     backend_eff, engine_hostapi, _ = _hostapi_display_to_engine(hostapi_eff)
 
+    session_id = _next_session_id()
     c = AudioDeviceClient(default.host, default.port, timeout=default.timeout)
     c.request(
         {
             "cmd": "session_start",
+            "session_id": session_id,
             "backend": backend_eff,
             "hostapi": engine_hostapi,
             "mode": "record",
@@ -1596,6 +1607,7 @@ def _rec_engine(
         samplerate=fs,
         _proc=proc,
         _client=c,
+        _session_id=session_id,
     )
     if blocking:
         y = h.wait()
@@ -1656,10 +1668,12 @@ def _play_engine(
     )
     backend_eff, engine_hostapi, _ = _hostapi_display_to_engine(hostapi_eff)
 
+    session_id = _next_session_id()
     c = AudioDeviceClient(default.host, default.port, timeout=default.timeout)
     c.request(
         {
             "cmd": "session_start",
+            "session_id": session_id,
             "backend": backend_eff,
             "hostapi": engine_hostapi,
             "mode": "play",
@@ -1668,7 +1682,6 @@ def _play_engine(
             "out_ch": int(ch),
             "device_in": "",
             "device_out": dev_out,
-            # Do not use duration-based auto-stop for playback.
             "duration_s": 0,
             "rotate_s": 0,
             "path": "",
@@ -1687,18 +1700,18 @@ def _play_engine(
                 pcm16 = np.clip(sub, -1.0, 1.0)
                 pcm16 = (pcm16 * 32767.0).astype(np.int16)
                 b64 = base64.b64encode(pcm16.tobytes()).decode("ascii")
-                r = c.request({"cmd": "play_write", "pcm16_b64": b64})
+                r = c.request({"cmd": "play_write", "session_id": session_id, "pcm16_b64": b64})
                 accepted = int(r.get("accepted_frames", int(sub.shape[0])))
                 if accepted <= 0:
                     time.sleep(0.002)
                     continue
                 off += accepted
-        c.request({"cmd": "play_finish"})
+        c.request({"cmd": "play_finish", "session_id": session_id})
         if blocking:
             _wait_session_end(c, timeout_s=float(frames) / float(fs) + 2.0)
     finally:
         try:
-            c.request({"cmd": "session_stop"})
+            c.request({"cmd": "session_stop", "session_id": session_id})
         except Exception:
             pass
         c.close()
@@ -1770,15 +1783,9 @@ def _playrec_engine(
     )
     backend_eff, engine_hostapi, _ = _hostapi_display_to_engine(hostapi_eff)
 
+    session_id = _next_session_id()
     c = AudioDeviceClient(default.host, default.port, timeout=default.timeout)
     try:
-        # Best-effort: if a previous session is still active (e.g. a crash),
-        # stop it so session_start doesn't fail.
-        try:
-            c.request({"cmd": "session_stop"})
-        except Exception:
-            pass
-
         # Some drivers reject certain sr/ch combos in duplex (e.g. 44.1k/1ch),
         # even though other combos work. Try a small set of fallbacks.
         max_in = 0
@@ -1827,6 +1834,7 @@ def _playrec_engine(
                     c.request(
                         {
                             "cmd": "session_start",
+                            "session_id": session_id,
                             "backend": backend_eff,
                             "hostapi": engine_hostapi,
                             "mode": "playrec",
@@ -1835,7 +1843,6 @@ def _playrec_engine(
                             "out_ch": int(out_ch),
                             "device_in": dev_in,
                             "device_out": dev_out,
-                            # Do not use duration-based auto-stop for playrec.
                             "duration_s": 0,
                             "rotate_s": 0,
                             "path": wav_path_abs,
@@ -1907,7 +1914,7 @@ def _playrec_engine(
                 got = 0
                 deadline = time.time() + (float(pre) / float(fs) if float(fs) > 0 else 0.0) + 2.0
                 while got < pre and time.time() < deadline:
-                    r = c.request({"cmd": "capture_read", "max_frames": int(min(chunk_frames, pre - got))})
+                    r = c.request({"cmd": "capture_read", "session_id": session_id, "max_frames": int(min(chunk_frames, pre - got))})
                     pcm = base64.b64decode(r.get("pcm16_b64", "") or "")
                     got_frames = int(r.get("frames", 0))
                     got_ch = int(r.get("channels", 0))
@@ -1929,13 +1936,12 @@ def _playrec_engine(
                     pcm16 = np.clip(sub, -1.0, 1.0)
                     pcm16 = (pcm16 * 32767.0).astype(np.int16)
                     b64 = base64.b64encode(pcm16.tobytes()).decode("ascii")
-                    r0 = c.request({"cmd": "play_write", "pcm16_b64": b64})
+                    r0 = c.request({"cmd": "play_write", "session_id": session_id, "pcm16_b64": b64})
                     accepted = int(r0.get("accepted_frames", int(sub.shape[0])))
                     if accepted <= 0:
                         if blocking:
-                            # Keep draining capture while output buffer is full.
                             try:
-                                _ = c.request({"cmd": "capture_read", "max_frames": int(chunk_frames)})
+                                _ = c.request({"cmd": "capture_read", "session_id": session_id, "max_frames": int(chunk_frames)})
                             except Exception:
                                 pass
                         time.sleep(0.002)
@@ -1943,7 +1949,7 @@ def _playrec_engine(
                     off += accepted
 
                 if blocking:
-                    r = c.request({"cmd": "capture_read", "max_frames": int(chunk_frames)})
+                    r = c.request({"cmd": "capture_read", "session_id": session_id, "max_frames": int(chunk_frames)})
                     pcm = base64.b64decode(r["pcm16_b64"])
                     got_frames = int(r["frames"])
                     got_ch = int(r["channels"])
@@ -1952,12 +1958,12 @@ def _playrec_engine(
                         if x.size > 0:
                             chunks.append(x)
 
-            c.request({"cmd": "play_finish"})
+            c.request({"cmd": "play_finish", "session_id": session_id})
 
             if blocking:
                 t_end = time.time() + float(frames) / float(fs) + 2.0
                 while time.time() < t_end:
-                    r = c.request({"cmd": "capture_read", "max_frames": int(chunk_frames)})
+                    r = c.request({"cmd": "capture_read", "session_id": session_id, "max_frames": int(chunk_frames)})
                     pcm = base64.b64decode(r["pcm16_b64"])
                     got_frames = int(r["frames"])
                     got_ch = int(r["channels"])
@@ -1972,7 +1978,7 @@ def _playrec_engine(
                 _wait_session_end(c, timeout_s=1.0)
         finally:
             try:
-                c.request({"cmd": "session_stop"})
+                c.request({"cmd": "session_stop", "session_id": session_id})
             except Exception:
                 pass
     finally:
@@ -3518,15 +3524,15 @@ class _StreamBase:
             out_map_cols = None
             out_ch_cb = int(out_ch)
 
+        session_id = _next_session_id()
         c = AudioDeviceClient(default.host, default.port, timeout=float(default.timeout))
         self._client = c
         try:
             c.request(
                 {
                     "cmd": "session_start",
+                    "session_id": session_id,
                     "backend": backend_eff,
-                    # Engine expects raw hostapi names (e.g. "WASAPI"/"DirectSound"/"MME"),
-                    # while our public layer may use audiodevice-like display names (e.g. "Windows WASAPI").
                     "hostapi": engine_hostapi,
                     "mode": mode,
                     "sr": int(self.samplerate),
@@ -3562,7 +3568,7 @@ class _StreamBase:
                         # Drain in larger chunks than blocksize to reduce round-trip overhead,
                         # otherwise small blocksize would inflate the observed delay.
                         drain_chunk = max(1024, int(min(4096, drain_target - drained)))
-                        r = c.request({"cmd": "capture_read", "max_frames": int(drain_chunk)})
+                        r = c.request({"cmd": "capture_read", "session_id": session_id, "max_frames": int(drain_chunk)})
                         got_frames = int(r.get("frames", 0))
                         if got_frames > 0:
                             drained += got_frames
@@ -3607,7 +3613,7 @@ class _StreamBase:
                     filled = 0
                     got_ch_eff = 0
                     while filled < frames and (not self._stop.is_set()):
-                        r = c.request({"cmd": "capture_read", "max_frames": int(frames - filled)})
+                        r = c.request({"cmd": "capture_read", "session_id": session_id, "max_frames": int(frames - filled)})
                         got_frames = int(r.get("frames", 0))
                         got_ch = int(r.get("channels", 0))
                         if got_frames <= 0 or got_ch <= 0:
@@ -3724,7 +3730,7 @@ class _StreamBase:
                         deadline = time.time() + 1.0
                         while True:
                             try:
-                                r0 = c.request({"cmd": "play_write", "pcm16_b64": b64})
+                                r0 = c.request({"cmd": "play_write", "session_id": session_id, "pcm16_b64": b64})
                                 break
                             except RuntimeError as e:
                                 msg = str(e)
@@ -3742,7 +3748,7 @@ class _StreamBase:
                             # If output buffer is full, optionally drain input to avoid input ringbuffer overflow.
                             if self.kind == "output" and int(in_ch_capture) > 0:
                                 try:
-                                    _ = c.request({"cmd": "capture_read", "max_frames": int(frames)})
+                                    _ = c.request({"cmd": "capture_read", "session_id": session_id, "max_frames": int(frames)})
                                 except Exception:
                                     pass
                             time.sleep(0.002)
@@ -3773,7 +3779,7 @@ class _StreamBase:
         finally:
             self._client = None
             try:
-                c.request({"cmd": "session_stop"})
+                c.request({"cmd": "session_stop", "session_id": session_id})
             except Exception:
                 pass
             c.close()
@@ -3889,13 +3895,14 @@ class LongRecordingHandle:
     path: str
     _proc: Optional[subprocess.Popen]
     _client: AudioDeviceClient
+    _session_id: str = ""
     _postprocess_stop: Optional["threading.Event"] = None
     _postprocess_thread: Optional["threading.Thread"] = None
 
     def stop(self) -> None:
         """Stop the long recording session and release resources."""
         try:
-            self._client.request({"cmd": "session_stop"})
+            self._client.request({"cmd": "session_stop", "session_id": self._session_id})
         finally:
             if self._postprocess_stop is not None:
                 try:
@@ -4098,10 +4105,12 @@ def rec_long(
     )
     backend_eff, engine_hostapi, _ = _hostapi_display_to_engine(hostapi_eff)
 
+    session_id = _next_session_id()
     c = AudioDeviceClient(default.host, default.port, timeout=default.timeout)
     c.request(
         {
             "cmd": "session_start",
+            "session_id": session_id,
             "backend": backend_eff,
             "hostapi": engine_hostapi,
             "mode": "record_long",
@@ -4119,7 +4128,7 @@ def rec_long(
         }
     )
 
-    h = LongRecordingHandle(path=path_abs, _proc=proc, _client=c)
+    h = LongRecordingHandle(path=path_abs, _proc=proc, _client=c, _session_id=session_id)
     if mapping_cols is not None:
         import threading
 

@@ -20,8 +20,8 @@ fn main() -> Result<()> {
     {
         let engine = engine.clone();
         ctrlc::set_handler(move || {
-            eprintln!("Ctrl+C received. Stopping session...");
-            let _ = engine.session_stop();
+            eprintln!("Ctrl+C received. Stopping all sessions...");
+            let _ = engine.session_stop_all();
         })?;
     }
 
