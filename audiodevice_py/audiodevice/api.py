@@ -1708,7 +1708,7 @@ def _play_engine(
                 off += accepted
         c.request({"cmd": "play_finish", "session_id": session_id})
         if blocking:
-            _wait_session_end(c, timeout_s=float(frames) / float(fs) + 2.0)
+            _wait_session_end(c, timeout_s=float(frames) / float(fs) + 2.0, session_id=session_id)
     finally:
         try:
             c.request({"cmd": "session_stop", "session_id": session_id})
@@ -1975,7 +1975,7 @@ def _playrec_engine(
                     if eof and got_frames == 0:
                         break
                     time.sleep(0.005)
-                _wait_session_end(c, timeout_s=1.0)
+                _wait_session_end(c, timeout_s=1.0, session_id=session_id)
         finally:
             try:
                 c.request({"cmd": "session_stop", "session_id": session_id})
@@ -2276,7 +2276,6 @@ def play(
         if y.ndim == 1:
             y = y[:, None]
 
-    dev_out_name = ""
     hostapi_name = str(getattr(default, "hostapi_name", "") or "MME")
 
     out_idx = _device_index_from_any(device_kw, "output")
@@ -2286,7 +2285,7 @@ def play(
         except Exception:
             out_idx = None
     if out_idx is not None and out_idx >= 0:
-        hostapi_name, dev_out_name = _device_name_from_index(int(out_idx))
+        hostapi_name, _ = _device_name_from_index(int(out_idx))
 
     # Prefer explicit channels kwarg, otherwise honor default output channels when set.
     out_ch_hint = None
@@ -2384,7 +2383,7 @@ def play(
                         blocking=True,
                         samplerate=int(fs),
                         hostapi=hostapi_name,
-                        device_out=dev_out_name,
+                        device_out=out_idx,
                         rb_seconds=rb_seconds,
                         chunk_frames=chunk_frames,
                     )
@@ -2438,7 +2437,7 @@ def play(
                     blocking=True,
                     samplerate=int(fs),
                     hostapi=hostapi_name,
-                    device_out=dev_out_name,
+                    device_out=out_idx,
                     rb_seconds=rb_seconds,
                     chunk_frames=chunk_frames,
                 )
@@ -2463,7 +2462,7 @@ def play(
         blocking=True,
         samplerate=int(fs),
         hostapi=hostapi_name,
-        device_out=dev_out_name,
+        device_out=out_idx,
         rb_seconds=rb_seconds,
         chunk_frames=chunk_frames,
     )
@@ -3048,17 +3047,21 @@ def stream_playrecord(
     return x.astype(np.float32, copy=False)
 
 
-def _wait_session_end(client: AudioDeviceClient, timeout_s: float) -> None:
+def _wait_session_end(client: AudioDeviceClient, timeout_s: float, session_id: str = "") -> None:
     """Poll engine status until the current session ends or timeout elapses.
 
     Args:
         client (AudioDeviceClient): Connected client instance.
         timeout_s (float): Timeout in seconds.
+        session_id (str): Session ID to query. Empty string uses legacy single-session behavior.
     """
     deadline = time.time() + float(timeout_s)
+    req: dict = {"cmd": "status"}
+    if session_id:
+        req["session_id"] = session_id
     while time.time() < deadline:
         try:
-            st = client.request({"cmd": "status"})
+            st = client.request(req)
         except Exception:
             return
         if not st.get("has_session", True):

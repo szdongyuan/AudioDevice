@@ -25,7 +25,7 @@ def init_engine() -> None:
 SAMPLERATE = 48000
 DURATION_S = 10
 DELAY_MS = 34
-DEVICE = (20, 24)  # (device_in, device_out)
+DEVICE = (24, 30)  # (device_in, device_out)Cannot be used with ASIO.
 DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
 INPUT_MAPPING = [1]  # 1-based: keep these input channels in returned recording
 
@@ -51,7 +51,7 @@ def apply_defaults() -> tuple[int | None, int | None]:
 
 INPUT_CHANNELS_NUM = int(DEFAULT_CHANNELS_NUM[0])
 THREAD_1_MAPPING = INPUT_MAPPING
-THREAD_2_MAPPING = [3]  # 1-based
+THREAD_2_MAPPING = [2]  # 1-based
 SAVE_DIR = os.path.join(os.path.dirname(__file__), "recordings", "two_thread_same_device_diff_channels")
 
 

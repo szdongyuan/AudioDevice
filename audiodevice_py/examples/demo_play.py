@@ -11,11 +11,11 @@ else:
     ad.init(timeout=10)
 ad.print_default_devices()
 
-SAMPLERATE = 48000
+SAMPLERATE = 44100
 DURATION_S = 5.0
-DEVICE = (10, 12)  # (device_in, device_out)
-DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
-OUTPUT_MAPPING = [1]  # 1-based
+DEVICE = (26, 27)  # (device_in, device_out)
+DEFAULT_CHANNELS_NUM = (1, 2)  # (in_ch, out_ch)
+OUTPUT_MAPPING = [1,2]  # 1-based
 
 ad.default.samplerate = SAMPLERATE
 ad.default.device = DEVICE
