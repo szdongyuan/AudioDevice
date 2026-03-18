@@ -153,7 +153,7 @@ def _next_session_id() -> str:
     global _SESSION_ID_COUNTER
     with _SESSION_ID_LOCK:
         _SESSION_ID_COUNTER += 1
-        return f"py-{_SESSION_ID_COUNTER}"
+        return f"py-{os.getpid()}-{_SESSION_ID_COUNTER}"
 
 
 class DeviceList(list):
