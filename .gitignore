@@ -53,11 +53,12 @@ audio_engine/third_party/portaudio/include/
 audio_engine/engine_err.txt
 # (was an invalid glob: "audio_engine/{")  # removed
 audio_engine/src/record.wav
-audio_engine/src/record.pkf
 
 # ===== Audio files =====
 *.wav
 *.WAV
+*.pkf
+*.PKF
 
 # ===== Local demo artifacts (do not commit) =====
 *.npy
