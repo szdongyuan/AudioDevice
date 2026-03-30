@@ -21,7 +21,7 @@ ad.print_default_devices()
 SAMPLERATE = 48_000
 BLOCKSIZE = 1024
 RB_SECONDS = 8
-DEVICE = (10, 12)  # (device_in, device_out)
+DEVICE = (14, 18)  # (device_in, device_out)
 DURATION_MS = 3000
 TARGET_FRAMES = int(round(SAMPLERATE * (DURATION_MS / 1000.0)))
 DELAY_MS = 0

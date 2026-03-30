@@ -3574,6 +3574,8 @@ class _StreamBase:
         session_id = _next_session_id()
         c = AudioDeviceClient(default.host, default.port, timeout=float(default.timeout))
         self._client = c
+        # Ensure `finally` can always reference this, even if session_start fails early.
+        stopped_gracefully = False
         try:
             c.request(
                 {
