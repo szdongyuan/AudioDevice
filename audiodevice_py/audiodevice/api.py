@@ -3219,6 +3219,7 @@ class _StreamBase:
         channels=None,
         mapping=None,
         output_mapping=None,
+        device=None,
         callback=None,
         delay_time=0,
         pacing: bool = True,
@@ -3243,6 +3244,9 @@ class _StreamBase:
                 the engine plays `channels` output channels, but the callback receives only
                 shape (frames, len(output_mapping)); those columns are routed into the selected
                 device output channels. Requires: channels >= max(output_mapping).
+            device: Device selection for the stream. Same semantics as audiodevice `rec()`/`play()`:
+                `int` for a single device index, or `(in_idx, out_idx)` tuple. If not provided,
+                uses global defaults (`ad.default.device` / overrides).
             callback: Callback with signature (indata, outdata, frames, time_info, status).
                 Format: indata (frames, in_ch) float32; outdata (frames, out_ch) float32, write in
                 callback; frames int; time_info dict; status CallbackFlags. Raise CallbackStop or
@@ -3265,6 +3269,8 @@ class _StreamBase:
         self._output_mapping_cols = None
         if output_mapping is not None:
             self._output_mapping_cols = _parse_1based_mapping_cols(output_mapping, arg_name="output_mapping")
+        self._device_in_idx = _device_index_from_any(device, "input")
+        self._device_out_idx = _device_index_from_any(device, "output")
         self.callback = callback
         self._cb_style: Optional[str] = None
         self.delay_time = 0.0 if delay_time is None else float(delay_time)
@@ -3275,6 +3281,9 @@ class _StreamBase:
         self._closed = False
         self._active = False
         self._thread_exception: Optional[BaseException] = None
+        self._resolved_hostapi_name: Optional[str] = None
+        self._resolved_device_in: Optional[str] = None
+        self._resolved_device_out: Optional[str] = None
         # Keep a reference so stop() can break blocking I/O by closing the socket.
         self._client: Optional[AudioDeviceClient] = None
 
@@ -3306,6 +3315,18 @@ class _StreamBase:
             return self
         if self.callback is None:
             raise ValueError("callback is required for Stream API in audiodevice")
+
+        # Snapshot device selection at start-time, so concurrent starts don't race on global defaults.
+        try:
+            hostapi_name, dev_in, dev_out = self._resolve_hostapi_and_devices_for_stream()
+            self._resolved_hostapi_name = str(hostapi_name or "")
+            self._resolved_device_in = str(dev_in or "")
+            self._resolved_device_out = str(dev_out or "")
+        except Exception:
+            # Fall back to runtime resolution in the worker.
+            self._resolved_hostapi_name = None
+            self._resolved_device_in = None
+            self._resolved_device_out = None
 
         self._stop.clear()
         self._active = True
@@ -3443,30 +3464,18 @@ class _StreamBase:
         Returns:
             tuple[str, str, str]: `(hostapi_name, device_in_name, device_out_name)`.
         """
-        hostapi_name = str(getattr(default, "hostapi_name", "") or "MME")
+        # Resolve per-stream device if explicitly provided; otherwise use defaults.
+        in_idx = self._device_in_idx
+        out_idx = self._device_out_idx
 
-        dev_in = ""
-        dev_out = ""
-        # Stream device selection is unified: always use global defaults.
-        # (Users configure `default.device` / device_in_override / device_out_override.)
-        try:
-            di_raw, do_raw = default._device_tuple_raw()
-            def_in = int(getattr(default, "device_in_override", -1))
-            def_out = int(getattr(default, "device_out_override", -1))
-            in_idx = def_in if def_in >= 0 else int(di_raw)
-            out_idx = def_out if def_out >= 0 else int(do_raw)
-        except Exception:
-            in_idx = -1
-            out_idx = -1
-
-        if int(in_idx) >= 0:
-            hostapi_name, dev_in = _device_name_from_index(int(in_idx))
-        if int(out_idx) >= 0:
-            hostapi2, dev_out = _device_name_from_index(int(out_idx))
-            if hostapi2:
-                hostapi_name = hostapi2
-
-        return hostapi_name, dev_in, dev_out
+        if self.kind == "input":
+            # Ignore output selection to avoid hostapi mismatch checks for unused output.
+            return _resolve_hostapi_and_devices(hostapi=None, device_in=in_idx, device_out=-1)
+        if self.kind == "output":
+            # Ignore input selection to avoid hostapi mismatch checks for unused input.
+            return _resolve_hostapi_and_devices(hostapi=None, device_in=-1, device_out=out_idx)
+        # Duplex: resolve both sides (must share a host API if both provided/effective).
+        return _resolve_hostapi_and_devices(hostapi=None, device_in=in_idx, device_out=out_idx)
 
     def _run(self) -> None:
         """Worker loop: start an engine session and drive the callback per block.
@@ -3475,7 +3484,11 @@ class _StreamBase:
             RuntimeError: If engine session fails or I/O fails.
         """
         # MVP implementation: use engine playrec mode and call callback per block.
-        hostapi_name, dev_in, dev_out = self._resolve_hostapi_and_devices_for_stream()
+        hostapi_name = self._resolved_hostapi_name
+        dev_in = self._resolved_device_in
+        dev_out = self._resolved_device_out
+        if hostapi_name is None or dev_in is None or dev_out is None:
+            hostapi_name, dev_in, dev_out = self._resolve_hostapi_and_devices_for_stream()
         backend_eff, engine_hostapi, _disp = _hostapi_display_to_engine(hostapi_name)
 
         # Channels
@@ -3795,7 +3808,7 @@ class Stream(_StreamBase):
 
         Args:
             *args: Forwarded to `_StreamBase`.
-            **kwargs: Forwarded to `_StreamBase` (notably `callback`, `samplerate`, `channels`).
+            **kwargs: Forwarded to `_StreamBase` (notably `callback`, `samplerate`, `channels`, `device`).
         """
         super().__init__(kind="duplex", *args, **kwargs)
 
@@ -3810,6 +3823,7 @@ class InputStream(_StreamBase):
         latency=None,
         channels=None,
         mapping=None,
+        device=None,
         callback=None,
         delay_time=0,
         pacing: bool = True,
@@ -3822,6 +3836,7 @@ class InputStream(_StreamBase):
             latency: Compatibility arg.
             channels: Input channel count captured from the device.
             mapping: 1-based input channel mapping applied before callback. Requires channels >= max(mapping).
+            device: Device selection for this stream. `int` or `(in_idx, out_idx)`; output part is ignored.
             callback: Callback signature like sounddevice:
                 callback(indata, frames, time_info, status) -> None
                 (The 5-arg form callback(indata, outdata, frames, time_info, status) is also accepted.)
@@ -3834,6 +3849,7 @@ class InputStream(_StreamBase):
             latency=latency,
             channels=channels,
             mapping=mapping,
+            device=device,
             callback=callback,
             delay_time=delay_time,
             pacing=pacing,
@@ -3851,6 +3867,7 @@ class OutputStream(_StreamBase):
         channels=None,
         mapping=None,
         output_mapping=None,
+        device=None,
         callback=None,
         pacing: bool = True,
     ) -> None:
@@ -3866,6 +3883,7 @@ class OutputStream(_StreamBase):
                 has shape (frames, len(mapping)).
             output_mapping: 1-based output channel mapping applied after callback. Requires
                 channels >= max(output_mapping). Callback outdata has shape (frames, len(output_mapping)).
+            device: Device selection for this stream. `int` or `(in_idx, out_idx)`; input part is ignored.
             callback: Callback signature like sounddevice:
                 callback(outdata, frames, time_info, status) -> None
                 (The 5-arg form callback(indata, outdata, frames, time_info, status) is also accepted.)
@@ -3887,6 +3905,7 @@ class OutputStream(_StreamBase):
             latency=latency,
             channels=channels,
             output_mapping=output_mapping,
+            device=device,
             callback=callback,
             pacing=pacing,
         )

@@ -1,5 +1,5 @@
 """
-demo_stream_output_diff_processes.py
+demo_stream_output_diff_threaded.py
 多个"逻辑任务"使用 **不同设备、不同采样率、不同 WAV 文件** 进行多线程流式播放，
 各自指定通道映射和采样率，并通过回调逐块输出音频数据。
 
@@ -7,7 +7,7 @@ demo_stream_output_diff_processes.py
   - OutputStream 内部使用 engine 的 "play" 模式，引擎对此模式只支持单个活动 session，
     第二个 session_start(mode="play") 会替代第一个。
   - 改用 ad.Stream（duplex）代替 ad.OutputStream：duplex 使用 "playrec" 模式，
-    引擎对此模式支持多个并发 session（与 demo_stream_input_diff_processes 对称）。
+    引擎对此模式支持多个并发 session（与 demo_stream_input_diff_threaded 对称）。
     回调中忽略 indata、只写 outdata 即可实现纯输出。
   - 在主线程中 **顺序** 设置 default.device / default.samplerate → 创建并启动
     Stream，等待引擎线程完成设备解析后再切换下一台设备的配置。

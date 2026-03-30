@@ -1,5 +1,5 @@
 """
-demo_stream_input_diff_processes.py
+demo_stream_input_diff_threaded.py
 多个"逻辑任务"使用 **不同设备、不同采样率、相同时长** 进行多线程流式录制 (InputStream)，
 各自指定通道映射和采样率，并将录制结果分别保存为 WAV 文件。
 

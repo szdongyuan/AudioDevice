@@ -1,5 +1,5 @@
 """
-demo_stream_input_two_processes.py
+demo_stream_input_two_threaded.py
 两个"逻辑任务"使用 **相同设备、相同采样率、相同时长** 进行流式录制 (InputStream)，
 分别需要不同的通道映射，并将结果各自保存为 WAV 文件。
 

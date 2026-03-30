@@ -29,7 +29,7 @@ DEVICE_1 = (24, 30)
 DEFAULT_CHANNELS_NUM_1 = (6, 2)
 REC_MAPPING_1 = [3]
 
-SAVE_DIR = Path(__file__).parent / "recordings" / "diff_processes"
+SAVE_DIR = Path(__file__).parent / "recordings" / "diff_threaded"
 
 
 def init_engine() -> None:
