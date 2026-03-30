@@ -38,6 +38,7 @@ sample_index = [0]
 cb_last_t = [None]  # perf_counter timestamp
 cb_count = [0]
 cb_dt_q: "queue.Queue[tuple[int, float, int, float]]" = queue.Queue(maxsize=10000)  # (n, dt_s, frames, expected_s)
+cb_status_q: "queue.Queue[tuple[int, str]]" = queue.Queue(maxsize=10000)  # (n, status_repr)
 
 # 注意：OutputStream 内部会先“预填充”一段输出环形缓冲，期间回调可能被紧密连续调用，dt 会远小于期望值。
 # 估算预填充回调次数（与 audiodevice.api._StreamBase._run 的逻辑保持一致），用于观测稳定段是否仍抖动。
@@ -70,6 +71,12 @@ def callback(indata, outdata, frames, time_info, status):
         expected = frames / float(ad.default.samplerate)
         try:
             cb_dt_q.put_nowait((n, dt, int(frames), float(expected)))
+        except queue.Full:
+            pass
+
+    if status:
+        try:
+            cb_status_q.put_nowait((n, repr(status)))
         except queue.Full:
             pass
 
@@ -119,7 +126,7 @@ def callback(indata, outdata, frames, time_info, status):
 
 # CHANNELS = 2
 
-print(f"播放正弦波 5 秒 (device_out_ch={DEVICE_OUT_CHANNELS}, callback_ch={CALLBACK_CHANNELS})...")
+print(f"播放正弦波 {TOTAL_SECONDS:.1f} 秒 (device_out_ch={DEVICE_OUT_CHANNELS}, callback_ch={CALLBACK_CHANNELS})...")
 with ad.OutputStream(
     callback=callback,
     channels=DEVICE_OUT_CHANNELS,
@@ -128,7 +135,7 @@ with ad.OutputStream(
     blocksize=BLOCKSIZE,
 ):
     # OutputStream 在后台线程里做 session_start；某些设备/后端启动会有明显延迟。
-    # 为了让“听到的时长”更接近 5 秒，先等到 session 真正启动后再开始计时。
+    # 为了让“听到的时长”更接近 TOTAL_SECONDS，先等到 session 真正启动后再开始计时。
     t0 = time.time()
     while True:
         st = ad.get_status() or {}
@@ -156,6 +163,13 @@ with ad.OutputStream(
                 f"  jitter={jitter_ms:8.3f} ms"
                 f"  frames={frames}"
             )
+
+        while True:
+            try:
+                n, status_repr = cb_status_q.get_nowait()
+            except queue.Empty:
+                break
+            print(f"callback #{n:04d}  STATUS: {status_repr}")
         ad.sleep(50)
 print("完成")
 

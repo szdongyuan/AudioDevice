@@ -3596,9 +3596,10 @@ class _StreamBase:
             # the real-time paced loop.  This prevents underruns caused by
             # Python-side timing jitter (GC, scheduling, TCP latency).
             _prefill_n = 0
+            prefill_s = 0.0
             if self.kind == "output" and out_ch > 0 and block_dt > 0:
-                _prefill_s = min(2.0, float(getattr(default, 'rb_seconds', 2)) * 0.2)
-                _prefill_n = max(4, int(_prefill_s / block_dt))
+                prefill_s = float(min(2.0, float(getattr(default, "rb_seconds", 2)) * 0.2))
+                _prefill_n = max(4, int(prefill_s / block_dt))
 
             next_tick = time.perf_counter()
             status = CallbackFlags()
@@ -3606,6 +3607,7 @@ class _StreamBase:
             pending_flags = 0
             cb_overrun_consecutive = 0
             cb_overrun_total = 0
+            stopped_gracefully = False
             while not self._stop.is_set():
                 # Match sounddevice semantics: each callback sees a "fresh" status flags object.
                 # (Timing diagnostics are updated below.)
@@ -3696,6 +3698,7 @@ class _StreamBase:
                     )
                     cb_s = time.perf_counter() - cb_t0
                 except CallbackStop:
+                    stopped_gracefully = True
                     break
                 except CallbackAbort:
                     break
@@ -3793,6 +3796,21 @@ class _StreamBase:
                         # If we're running late, avoid accumulating unbounded lag.
                         next_tick = now
         finally:
+            # If the user stopped the stream by raising CallbackStop, try to let the engine
+            # drain its output ring buffer instead of truncating queued audio.
+            if stopped_gracefully and self.kind == "output" and (not self._stop.is_set()) and out_ch > 0:
+                try:
+                    c.request({"cmd": "play_finish", "session_id": session_id})
+                except Exception:
+                    pass
+                if self.pacing:
+                    try:
+                        drain_timeout = float(max(2.0, prefill_s + 2.0))
+                        drain_timeout = float(min(15.0, drain_timeout))
+                        _wait_session_end(c, timeout_s=drain_timeout, session_id=session_id)
+                    except Exception:
+                        pass
+
             self._client = None
             try:
                 c.request({"cmd": "session_stop", "session_id": session_id})
