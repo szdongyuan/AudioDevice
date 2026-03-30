@@ -159,26 +159,15 @@ class _DefaultHolder:
 
     @channels.setter
     def channels(self, value) -> None:
-        """Set default channels.
+        """default.channels is read-only.
 
-        Args:
-            value (int | tuple[int|None, int|None] | None): Channel count(s).
-
-        Raises:
-            TypeError: If `value` is not supported.
+        Rationale:
+        - Channel selection should be explicit per call (channels=...) or inferred from
+          mapping/output_mapping and array shapes, rather than a mutable global default.
         """
-        if value is None:
-            self._cfg.channels = (None, None)
-            return
-        if isinstance(value, int):
-            self._cfg.channels = (int(value), int(value))
-            return
-        if isinstance(value, (list, tuple)) and len(value) == 2:
-            a = None if value[0] is None else int(value[0])
-            b = None if value[1] is None else int(value[1])
-            self._cfg.channels = (a, b)
-            return
-        raise TypeError("default.channels must be int, (in, out), or None")
+        raise AttributeError(
+            "default.channels is read-only; pass channels=... (and/or mapping/output_mapping) to rec/play/playrec/Stream"
+        )
 
     @property
     def samplerate(self) -> Optional[float]:

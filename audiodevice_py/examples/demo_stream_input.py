@@ -22,18 +22,16 @@ SAMPLERATE = 48_000
 BLOCKSIZE = 1024
 RB_SECONDS = 8
 DEVICE = (10, 12)  # (device_in, device_out)
-DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
 DURATION_MS = 3000
 TARGET_FRAMES = int(round(SAMPLERATE * (DURATION_MS / 1000.0)))
 DELAY_MS = 0
 INPUT_MAPPING = [1, 3, 5]  # 1-based: pick these input channels
-CHANNELS = 6  # must be >= max(INPUT_MAPPING)
+CHANNELS = len(INPUT_MAPPING)  # sounddevice-like: callback channels == len(mapping)
 SAVE_CHANNELS = len(INPUT_MAPPING)
 
 # More stable defaults for stream demos
 ad.default.samplerate = SAMPLERATE
 ad.default.device = DEVICE
-ad.default.channels = DEFAULT_CHANNELS_NUM
 ad.default.rb_seconds = RB_SECONDS
 
 

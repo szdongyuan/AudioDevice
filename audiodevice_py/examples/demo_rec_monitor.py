@@ -18,15 +18,13 @@ MONITOR_CH = 3  # 1-based
 OUTPUT_MAPPING = [1]  # 1-based
 WAV_PATH = os.path.join(os.path.dirname(__file__), "rec_monitor.wav")
 DEVICE = (10, 12)  # (device_in, device_out)
-DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
 
 ad.default.samplerate = SAMPLERATE
 ad.default.device = DEVICE
-ad.default.channels = DEFAULT_CHANNELS_NUM
 
 
 def main() -> None:
-    IN_CH = int(ad.default.channels.input or 1)
+    IN_CH = max(1, int(MONITOR_CH))
 
     print("hostapi:", ad.default.hostapi)
     print("device_in:", ad.default.device_in)

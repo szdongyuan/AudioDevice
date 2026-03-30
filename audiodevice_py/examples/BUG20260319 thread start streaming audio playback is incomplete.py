@@ -419,7 +419,6 @@ def run_audiodevice_threads() -> list[dict[str, Any]]:
     ad.default.device = tuple(DEVICE)
     ad.default.samplerate = int(SAMPLERATE)
     max_out_ch = max(int(ch) for ch in THREAD_OUTPUT_CHANNELS)
-    ad.default.channels = (1, int(max_out_ch))
     ad.default.rb_seconds = 20
 
     results: list[dict[str, Any]] = []

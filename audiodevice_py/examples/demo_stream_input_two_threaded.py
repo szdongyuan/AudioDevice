@@ -38,9 +38,6 @@ DELAY_MS = 34
 BLOCKSIZE = 1024
 RB_SECONDS = 8
 DEVICE = (24, 30)
-DEFAULT_CHANNELS_NUM = (6, 2)
-INPUT_CHANNELS_NUM = int(DEFAULT_CHANNELS_NUM[0])
-
 THREAD_1_MAPPING = [1]
 THREAD_2_MAPPING = [3]
 
@@ -54,7 +51,6 @@ SAVE_DIR = os.path.join(
 
 def apply_defaults() -> tuple[int | None, int | None]:
     ad.default.samplerate = int(SAMPLERATE)
-    ad.default.channels = DEFAULT_CHANNELS_NUM
     ad.default.rb_seconds = RB_SECONDS
 
     try:
@@ -178,7 +174,7 @@ def run_together() -> list[dict[str, Any]]:
     try:
         stream = ad.InputStream(
             callback=callback,
-            channels=INPUT_CHANNELS_NUM,
+            channels=int(len(combined_mapping)),
             samplerate=SAMPLERATE,
             blocksize=BLOCKSIZE,
             delay_time=int(DELAY_MS),
@@ -302,7 +298,7 @@ def run_separate() -> list[dict[str, Any]]:
         try:
             stream = ad.InputStream(
                 callback=make_callback(chunks, frames_captured, target_frames, done_event),
-                channels=INPUT_CHANNELS_NUM,
+                channels=int(len(mapping)),
                 samplerate=SAMPLERATE,
                 blocksize=BLOCKSIZE,
                 delay_time=int(DELAY_MS),
@@ -360,7 +356,6 @@ def run() -> None:
     print(f"samplerate={SAMPLERATE}, duration_s={DURATION_S}, "
           f"delay_ms={DELAY_MS}, blocksize={BLOCKSIZE}")
     print(f"device_const(in,out)={DEVICE}, device_used(in,out)=({din},{dout})")
-    print(f"input_channels_num={INPUT_CHANNELS_NUM}")
     print(f"thread-1 mapping={THREAD_1_MAPPING}")
     print(f"thread-2 mapping={THREAD_2_MAPPING}")
     print("Use run_separate() for sequential calls.")

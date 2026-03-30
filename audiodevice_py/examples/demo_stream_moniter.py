@@ -24,7 +24,6 @@ IN_CH = 6
 OUT_CH = 2
 RB_SECONDS = 8
 DEVICE = (10, 12)   # (device_in, device_out)
-DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
 DURATION_MS = 10000
 TARGET_FRAMES = int(round(SAMPLERATE * (DURATION_MS / 1000.0)))
 SAVE_CH = int(OUT_CH)
@@ -37,7 +36,6 @@ OUTPUT_MAPPING = [1]
 # More stable defaults for stream demos
 ad.default.samplerate = SAMPLERATE
 ad.default.device = DEVICE
-ad.default.channels = DEFAULT_CHANNELS_NUM
 ad.default.rb_seconds = RB_SECONDS
 
 

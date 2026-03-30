@@ -4,7 +4,6 @@ demo_alignment.py - 对齐验证（只展示对齐细节）
 固定默认配置：
 - ad.default.device = (14, 18)
 - ad.default.samplerate = 48_000
-- ad.default.channels = (6, 2)
 
 会播放 4 次：
 - playrec raw / aligned
@@ -36,11 +35,9 @@ AMP = 0.1
 BLOCKSIZE = 1024
 ALIGNMENT_CH = 1  # 1-based
 DEVICE = (14, 18)  # (device_in, device_out)
-DEFAULT_CHANNELS_NUM = (IN_CH, OUT_CH)
 
 ad.default.device = DEVICE
 ad.default.samplerate = SAMPLERATE
-ad.default.channels = DEFAULT_CHANNELS_NUM
 
 
 def to_mono(x: np.ndarray) -> np.ndarray:
@@ -149,11 +146,11 @@ def plot_full_waveform(
 def main() -> None:
     y_ref = make_stimulus(SAMPLERATE, DURATION_S, OUT_CH, AMP)
 
-    x_playrec_raw = ad.playrec(y_ref, blocking=True, alignment=False)
-    x_playrec_aligned = ad.playrec(y_ref, blocking=True, alignment=True, alignment_channel=ALIGNMENT_CH)
+    x_playrec_raw = ad.playrec(y_ref, blocking=True, alignment=False, channels=IN_CH)
+    x_playrec_aligned = ad.playrec(y_ref, blocking=True, alignment=True, alignment_channel=ALIGNMENT_CH, channels=IN_CH)
 
-    x_stream_raw = ad.stream_playrecord(y_ref, blocksize=BLOCKSIZE, alignment=False)
-    x_stream_aligned = ad.stream_playrecord(y_ref, blocksize=BLOCKSIZE, alignment=True, alignment_channel=ALIGNMENT_CH)
+    x_stream_raw = ad.stream_playrecord(y_ref, blocksize=BLOCKSIZE, alignment=False, channels=IN_CH)
+    x_stream_aligned = ad.stream_playrecord(y_ref, blocksize=BLOCKSIZE, alignment=True, alignment_channel=ALIGNMENT_CH, channels=IN_CH)
 
     d_pr_raw, _, _ = gcc_delay(y_ref, x_playrec_raw)
     d_pr_aln, _, _ = gcc_delay(y_ref, x_playrec_aligned)

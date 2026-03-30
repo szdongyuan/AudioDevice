@@ -34,14 +34,13 @@ SAMPLERATE = 48_000
 BLOCKSIZE = 1024
 ROTATE_S = 10.0  # set to 0 to disable rotation
 INPUT_MAPPING = [1, 3, 5]  # 1-based: keep these input channels (and order) in WAV
+INPUT_CHANNELS = len(INPUT_MAPPING)  # sounddevice-like: callback channels == len(mapping)
 RB_SECONDS = 8
 DEVICE = (10, 12)  # (device_in, device_out)
-DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
 
 # More stable defaults for stream demos
 ad.default.samplerate = SAMPLERATE
 ad.default.device = DEVICE
-ad.default.channels = DEFAULT_CHANNELS_NUM
 ad.default.rb_seconds = RB_SECONDS
 
 
@@ -194,7 +193,7 @@ def main() -> None:
     try:
         with ad.InputStream(
             callback=callback,
-            channels=ad.default.channels[0],
+            channels=int(INPUT_CHANNELS),
             samplerate=SAMPLERATE,
             blocksize=BLOCKSIZE,
             mapping=INPUT_MAPPING,

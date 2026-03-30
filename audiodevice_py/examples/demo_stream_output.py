@@ -25,7 +25,6 @@ OUTPUT_MAPPING = [1, 2]  # 1-based: route callback columns to output channels
 DEVICE_OUT_CHANNELS = 2  # many devices/drivers reject mono (1ch) output configs
 CALLBACK_CHANNELS = len(OUTPUT_MAPPING)
 DEVICE = (14, 18)  # (device_in, device_out)
-DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch) for engine default session
 
 VOLUME = 0.5
 TOTAL_SECONDS = 4
@@ -49,7 +48,6 @@ PREFILL_BLOCKS = max(4, int(_prefill_s / _block_dt)) if _block_dt > 0 else 0
 # More stable defaults for stream demos
 ad.default.samplerate = SAMPLERATE
 ad.default.device = DEVICE
-ad.default.channels = DEFAULT_CHANNELS_NUM
 ad.default.rb_seconds = RB_SECONDS
 ad.print_default_devices()
 print(tuple(ad.default.device))

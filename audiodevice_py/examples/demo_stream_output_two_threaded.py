@@ -171,7 +171,6 @@ def run_together() -> list[dict[str, Any]]:
     init_engine()
     ad.default.samplerate = SAMPLERATE
     ad.default.device = DEVICE
-    ad.default.channels = DEFAULT_CHANNELS_NUM
     ad.default.rb_seconds = RB_SECONDS
 
     all_mappings = [TASK_0_MAPPING, TASK_1_MAPPING]
@@ -311,7 +310,6 @@ def run_separate() -> list[dict[str, Any]]:
         init_engine()
         ad.default.samplerate = SAMPLERATE
         ad.default.device = DEVICE
-        ad.default.channels = DEFAULT_CHANNELS_NUM
         ad.default.rb_seconds = RB_SECONDS
 
         play_sr = SAMPLERATE

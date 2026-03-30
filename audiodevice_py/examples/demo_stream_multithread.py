@@ -35,13 +35,11 @@ F_START_HZ = 1000.0
 F_END_HZ = 3000.0
 RB_SECONDS = 8
 DEVICE = (10, 12) 
-DEFAULT_CHANNELS_NUM = (6, 2)
 
 # More stable defaults for stream demos
 ad.default.samplerate = SAMPLERATE
 ad.default.rb_seconds = RB_SECONDS
 ad.default.device = DEVICE
-ad.default.channels = DEFAULT_CHANNELS_NUM
 
 
 def main() -> None:

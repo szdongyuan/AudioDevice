@@ -123,14 +123,13 @@ def main() -> None:
 
     ad.default.samplerate = SAMPLERATE
     ad.default.device = DEVICE
-    ad.default.channels = DEFAULT_CHANNELS_NUM
 
     try:
         # NOTE:
         # - rec_long(mapping=...) post-processes segments in a background thread and expects the
         #   original rotated filenames to remain intact.
         # - This demo renames/trim segments, so we do channel mapping here (before rename) instead.
-        h = ad.rec_long(wav_path, rotate_s=int(ROTATE_S))
+        h = ad.rec_long(wav_path, rotate_s=int(ROTATE_S), channels=int(max(INPUT_MAPPING)))
         print(
             "started:",
             "hostapi=",
@@ -138,7 +137,7 @@ def main() -> None:
             "samplerate=",
             ad.default.samplerate,
             "channels=",
-            ad.default.channels,
+            int(max(INPUT_MAPPING)),
             "device=",
             ad.default.device,
         )

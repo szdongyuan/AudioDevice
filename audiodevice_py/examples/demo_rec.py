@@ -17,15 +17,12 @@ ad.print_default_devices()
 SAMPLERATE = 48_000
 DURATION_S = 3.0
 DELAY_MS = 200
-INPUT_CHANNELS_NUM = 6
 INPUT_MAPPING = [1, 3, 5]  # 1-based
 WAV_PATH = os.path.join(os.path.dirname(__file__), "rec88888.wav")
 DEVICE = (10, 12)  # (device_in, device_out)
-DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
 
 ad.default.samplerate = SAMPLERATE
 ad.default.device = DEVICE
-ad.default.channels = DEFAULT_CHANNELS_NUM
 
 def main() -> None:
     frames = int(round(float(SAMPLERATE) * float(DURATION_S)))
@@ -34,7 +31,6 @@ def main() -> None:
         blocking=True,
         wav_path=WAV_PATH,
         save_wav=True,
-        channels=INPUT_CHANNELS_NUM,
         delay_time=DELAY_MS,
         mapping=INPUT_MAPPING,
     )

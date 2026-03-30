@@ -46,15 +46,15 @@ RB_SECONDS = 8
 DEVICE_0 = (26, 27)
 SAMPLERATE_0 = 44100
 DEFAULT_CHANNELS_NUM_0 = (1, 2)
-INPUT_CHANNELS_NUM_0 = int(DEFAULT_CHANNELS_NUM_0[0])
 MAPPING_0 = [1]
+INPUT_CHANNELS_NUM_0 = len(MAPPING_0)  # sounddevice-like: callback channels == len(mapping)
 
 # 设备 1
 DEVICE_1 = (24, 30)
 SAMPLERATE_1 = 48000
 DEFAULT_CHANNELS_NUM_1 = (6, 2)
-INPUT_CHANNELS_NUM_1 = int(DEFAULT_CHANNELS_NUM_1[0])
 MAPPING_1 = [3]
+INPUT_CHANNELS_NUM_1 = len(MAPPING_1)  # sounddevice-like: callback channels == len(mapping)
 
 SAVE_DIR = os.path.join(
     os.path.dirname(__file__),
@@ -187,7 +187,6 @@ def run() -> list[dict[str, Any]]:
         done_event = threading.Event()
 
         ad.default.device = job["device"]
-        ad.default.channels = job["channels_num"]
         ad.default.samplerate = sr
 
         cb = _make_callback(chunks, frames_captured, target_frames, done_event)
@@ -305,7 +304,6 @@ def run_sequential() -> list[dict[str, Any]]:
         ad.default.samplerate = sr
         ad.default.rb_seconds = RB_SECONDS
         ad.default.device = device
-        ad.default.channels = job["channels_num"]
 
         target_frames = int(round(float(sr) * float(DURATION_S)))
         wav_path = build_wav_path(name, din, mapping)

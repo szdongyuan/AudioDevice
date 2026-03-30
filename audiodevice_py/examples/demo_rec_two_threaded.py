@@ -26,7 +26,6 @@ SAMPLERATE = 48000
 DURATION_S = 10
 DELAY_MS = 34
 DEVICE = (24, 30)  # (device_in, device_out)Cannot be used with ASIO.
-DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
 INPUT_MAPPING = [1]  # 1-based: keep these input channels in returned recording
 
 # ---- end constants block ----
@@ -34,7 +33,6 @@ INPUT_MAPPING = [1]  # 1-based: keep these input channels in returned recording
 
 def apply_defaults() -> tuple[int | None, int | None]:
     ad.default.samplerate = int(SAMPLERATE)
-    ad.default.channels = DEFAULT_CHANNELS_NUM
 
     try:
         ad.default.device = DEVICE
@@ -49,7 +47,6 @@ def apply_defaults() -> tuple[int | None, int | None]:
         return None, None
 
 
-INPUT_CHANNELS_NUM = int(DEFAULT_CHANNELS_NUM[0])
 THREAD_1_MAPPING = INPUT_MAPPING
 THREAD_2_MAPPING = [2]  # 1-based
 SAVE_DIR = os.path.join(os.path.dirname(__file__), "recordings", "two_thread_same_device_diff_channels")
@@ -93,7 +90,6 @@ def record_once(name: str, mapping: list[int]) -> dict[str, Any]:
             frames,
             blocking=True,
             delay_time=int(DELAY_MS),
-            channels=int(INPUT_CHANNELS_NUM),
             mapping=mapping,
             dtype=np.float32,
             save_wav=True,

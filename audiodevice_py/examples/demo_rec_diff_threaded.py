@@ -83,7 +83,6 @@ def record_once(
             frames,
             blocking=True,
             delay_time=int(DELAY_MS),
-            channels=int(channels_num[0]),
             mapping=mapping,
             device=device,
             dtype=np.float32,

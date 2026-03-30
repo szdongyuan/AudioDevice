@@ -17,15 +17,13 @@ ad.print_default_devices()
 SAMPLERATE = 48000
 DURATION_S = 5.0
 DELAY_MS = 34
-DEVICE = (10, 12)  # (device_in, device_out)
-DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch)
+DEVICE = (14, 18)  # (device_in, device_out)
 OUTPUT_MAPPING = [1]  # 1-based
 INPUT_MAPPING = [1, 3, 5]  # 1-based: keep these input channels in returned recording
 WAV_PATH = os.path.join(os.path.dirname(__file__), "playrecdelay34ms.wav")
 
 ad.default.samplerate = SAMPLERATE
 ad.default.device = DEVICE
-ad.default.channels = DEFAULT_CHANNELS_NUM
 
 def write_wav_int16(path: str, samplerate: int, data: np.ndarray) -> None:
     x = np.asarray(data)

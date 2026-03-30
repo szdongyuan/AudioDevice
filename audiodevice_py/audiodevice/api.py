@@ -1220,7 +1220,7 @@ def rec_monitor(
             Example: [2] routes to right channel only.
         samplerate: Target sample rate in Hz. Uses default.samplerate if None.
             Format: int or None, e.g. 44100.
-        channels: Number of input channels to record. Uses default.channels[0] or 1 if None.
+        channels: Number of input channels to record. Inferred from monitor_channel or 1 if None.
             Format: int or None.
         device_in: Input device index (global index from query_devices()). None = use default.
             Only int is accepted; device names are not supported.
@@ -1243,8 +1243,14 @@ def rec_monitor(
         raise ValueError("duration_s must be > 0")
 
     fs0 = int(samplerate if samplerate is not None else (default.samplerate if default.samplerate is not None else _DEFAULT_SR_FALLBACK))
-    ch_def = default.channels[0] if getattr(default, "channels", None) is not None else None
-    ch0 = int(channels if channels is not None else (int(ch_def) if ch_def is not None else 1))
+    if channels is None:
+        # Infer minimal safe input channel count from monitor_channel (if set), otherwise 1.
+        need = 1
+        if monitor_channel is not None:
+            need = max(need, int(monitor_channel))
+        ch0 = int(need)
+    else:
+        ch0 = int(channels)
 
     monitor_in_idx: Optional[int] = None
     if monitor_channel is not None:
@@ -1496,12 +1502,7 @@ def _write_wav_from_float32(path: str, y: np.ndarray, sr: int) -> None:
     if x.shape[0] > 0:
         ch = int(x.shape[1])
     else:
-        ch0 = None
-        try:
-            ch0 = default.channels[0] if getattr(default, "channels", None) is not None else None
-        except Exception:
-            ch0 = None
-        ch = int(ch0) if ch0 else 1
+        ch = 1
     ch = max(ch, 1)
 
     pcm16 = np.clip(x, -1.0, 1.0)
@@ -1557,8 +1558,7 @@ def _rec_engine(
     proc = _ensure_engine_running()
 
     fs = int(samplerate if samplerate is not None else (default.samplerate if default.samplerate is not None else _DEFAULT_SR_FALLBACK))
-    ch_default = default.channels[0] if getattr(default, "channels", None) is not None else None
-    ch = int(channels if channels is not None else (int(ch_default) if ch_default is not None else 1))
+    ch = int(channels if channels is not None else 1)
     duration_s = float(frames) / float(fs) if isinstance(frames, int) else float(frames)
 
     if save_wav and not wav_path:
@@ -1765,8 +1765,7 @@ def _playrec_engine(
     if y.ndim == 1:
         y = y[:, None]
     frames, out_ch = y.shape
-    ch_default = default.channels[0] if getattr(default, "channels", None) is not None else None
-    in_ch = int(in_channels if in_channels is not None else (int(ch_default) if ch_default is not None else 1))
+    in_ch = int(in_channels if in_channels is not None else 1)
 
     if save_wav and not wav_path:
         raise ValueError("save_wav=True requires a non-empty wav_path")
@@ -2287,16 +2286,10 @@ def play(
     if out_idx is not None and out_idx >= 0:
         hostapi_name, _ = _device_name_from_index(int(out_idx))
 
-    # Prefer explicit channels kwarg, otherwise honor default output channels when set.
+    # Prefer explicit channels kwarg.
     out_ch_hint = None
     if channels_kw is not None:
         out_ch_hint = int(channels_kw)
-    else:
-        try:
-            out_ch_def = default.channels.output
-            out_ch_hint = None if out_ch_def is None else int(out_ch_def)
-        except Exception:
-            out_ch_hint = None
 
     # If user didn't specify a channel count but did specify output_mapping, try to pick a
     # compatible open-channel count for common devices where 1ch may be unsupported but 2ch is.
@@ -2485,7 +2478,7 @@ def rec(
             out.shape[0] if None. Format: non-negative int; can be omitted if out is given.
         samplerate: Sample rate in Hz. Uses default.samplerate if None.
             Format: int or float, e.g. 44100.
-        channels: Number of input channels to record. Inferred from out or default.channels[0].
+        channels: Number of input channels to record. Inferred from out, mapping, or 1.
             Format: positive int, e.g. 1, 2.
         out: Pre-allocated array for recording; shape must be (frames, channels).
             Format: np.ndarray shape (frames, channels); if provided, frames can be omitted.
@@ -2545,17 +2538,23 @@ def rec(
 
     fs = float(samplerate) if samplerate is not None else (default.samplerate if default.samplerate is not None else _DEFAULT_SR_FALLBACK)
 
+    # sounddevice-like mapping semantics:
+    # - `channels` describes the returned channel count (i.e. callback/output channels)
+    # - `mapping` selects which device channels to use (1-based indices)
+    # Internally we may need to capture more channels than we return.
     if channels is None:
         if out is not None and np.asarray(out).ndim >= 2:
             channels = int(np.asarray(out).shape[1])
+        elif mapping_cols is not None:
+            channels = int(len(mapping_cols))
         else:
-            ch_def = default.channels[0]
-            channels = int(ch_def) if ch_def is not None else 1
+            channels = 1
     ch_i = int(channels)
+    cap_ch = int(ch_i)
     if mapping_cols is not None:
-        need_ch = int(max(mapping_cols) + 1)
-        if int(ch_i) < int(need_ch):
-            raise ValueError(f"channels ({ch_i}) must be >= max(mapping) ({need_ch})")
+        if int(ch_i) != int(len(mapping_cols)):
+            raise ValueError(f"channels ({ch_i}) must equal len(mapping) ({int(len(mapping_cols))}) when mapping is used")
+        cap_ch = int(max(mapping_cols) + 1)
 
     out_ch = int(len(mapping_cols)) if mapping_cols is not None else int(ch_i)
     if out is None:
@@ -2594,7 +2593,7 @@ def rec(
             save_wav=False,
             blocking=True,
             samplerate=int(fs),
-            channels=int(ch_i),
+            channels=int(cap_ch),
             hostapi=None,
             device_in=in_idx,
             rb_seconds=rb_seconds,
@@ -2664,7 +2663,7 @@ def playrec(
             Format: array-like, shape (frames,) or (frames, channels); converted to float32.
         samplerate: Sample rate in Hz. Uses default.samplerate if None.
             Format: int or float, e.g. 44100.
-        channels: Number of input channels to record; default default.channels[0] or 1.
+        channels: Number of input channels to record; inferred from input_mapping or 1 when omitted.
             Format: positive int.
         out: Pre-allocated array for recorded audio; shape (frames, channels), frames = data rows.
             Format: np.ndarray or None.
@@ -2706,13 +2705,9 @@ def playrec(
         y_out = y_out[:, None]
     if output_mapping is not None:
         y_out = _route_channels_1based(y_out, output_mapping, arg_name="output_mapping")
-        # If default output channels are set, pad with silence so duplex opens with that count.
-        # Otherwise, best-effort pad to 2 when the output device supports >=2 (some drivers reject 1ch).
-        try:
-            out_ch_def = default.channels.output
-            out_ch_pad = None if out_ch_def is None else int(out_ch_def)
-        except Exception:
-            out_ch_pad = None
+        # Best-effort pad to 2 when the output device supports >=2
+        # (some drivers reject 1ch duplex/play configs).
+        out_ch_pad = None
         if out_ch_pad is None:
             max_out0 = 0
             try:
@@ -2753,15 +2748,19 @@ def playrec(
     frames_i = int(y_out.shape[0])
 
     if channels is None:
-        ch_def = default.channels[0]
-        channels = int(ch_def) if ch_def is not None else 1
-    in_ch_capture = int(channels)
+        if in_map_cols is not None:
+            channels = int(len(in_map_cols))
+        else:
+            channels = 1
+    in_ch_cb = int(channels)
+    in_ch_capture = int(in_ch_cb)
     if in_map_cols is not None:
-        need_ch = int(max(in_map_cols) + 1)
-        if int(in_ch_capture) < int(need_ch):
-            # capture enough channels to be able to map
-            in_ch_capture = int(need_ch)
-    out_ch_return = int(len(in_map_cols)) if in_map_cols is not None else int(in_ch_capture)
+        if int(in_ch_cb) != int(len(in_map_cols)):
+            raise ValueError(
+                f"channels ({in_ch_cb}) must equal len(input_mapping) ({int(len(in_map_cols))}) when input_mapping is used"
+            )
+        in_ch_capture = int(max(in_map_cols) + 1)
+    out_ch_return = int(len(in_map_cols)) if in_map_cols is not None else int(in_ch_cb)
 
     if out is None:
         out_arr = np.zeros((frames_i, out_ch_return), dtype=np.float32)
@@ -2888,7 +2887,7 @@ def stream_playrecord(
     Args:
         data: Audio to play. Shape (frames,) or (frames, out_channels), float32-like.
         samplerate: Sample rate in Hz; defaults to `default.samplerate`.
-        channels: Number of input channels to record; defaults to `default.channels[0]` or 1.
+        channels: Number of input channels to record; inferred from input_mapping or 1 when omitted.
         blocksize: Callback block size (frames).
         delay_time: Recording delay relative to playback, in milliseconds.
             Mirrors `playrec()` semantics:
@@ -2925,14 +2924,8 @@ def stream_playrecord(
 
     if output_mapping is not None:
         y_out0 = _route_channels_1based(y_out0, output_mapping, arg_name="output_mapping")
-        # If default output channels are set, pad with silence so engine can open that config.
-        # Otherwise, best-effort pad to 2 when the output device supports >=2 (some drivers reject 1ch).
+        # Best-effort pad to 2 when the output device supports >=2 (some drivers reject 1ch).
         out_ch_pad = None
-        try:
-            out_ch_def = default.channels.output
-            out_ch_pad = None if out_ch_def is None else int(out_ch_def)
-        except Exception:
-            out_ch_pad = None
         if out_ch_pad is None:
             out_idx = None
             try:
@@ -2978,14 +2971,19 @@ def stream_playrecord(
     frames_i = int(y_out0.shape[0])
 
     if channels is None:
-        ch_def = default.channels[0]
-        channels = int(ch_def) if ch_def is not None else 1
-    in_ch_capture = int(channels)
+        if in_map_cols is not None:
+            channels = int(len(in_map_cols))
+        else:
+            channels = 1
+    in_ch_cb = int(channels)
+    in_ch_capture = int(in_ch_cb)
     if in_map_cols is not None:
-        need_ch = int(max(in_map_cols) + 1)
-        if int(in_ch_capture) < int(need_ch):
-            raise ValueError(f"channels ({in_ch_capture}) must be >= max(input_mapping) ({need_ch})")
-    out_ch_return = int(len(in_map_cols)) if in_map_cols is not None else int(in_ch_capture)
+        if int(in_ch_cb) != int(len(in_map_cols)):
+            raise ValueError(
+                f"channels ({in_ch_cb}) must equal len(input_mapping) ({int(len(in_map_cols))}) when input_mapping is used"
+            )
+        in_ch_capture = int(max(in_map_cols) + 1)
+    out_ch_return = int(len(in_map_cols)) if in_map_cols is not None else int(in_ch_cb)
 
     if save_wav and not wav_path:
         raise ValueError("save_wav=True requires wav_path")
@@ -3236,14 +3234,15 @@ class _StreamBase:
             latency: Kept for compatibility; low-latency hint (best-effort).
             channels: Channel count. For duplex: int or (in_ch, out_ch). For input/output: int.
                 Format: int or (int, int), e.g. 2 or (1, 2).
-            mapping: 1-based input channel mapping (InputStream/Stream only). If provided, the
-                engine still captures `channels` input channels, but the callback receives only
-                the selected/reordered channels with shape (frames, len(mapping)).
-                Requires: channels >= max(mapping). Format: non-empty sequence, e.g. [1] or [2, 1].
+            mapping: 1-based input channel mapping (InputStream/Stream only). If provided,
+                `channels` refers to the callback channel count and must equal len(mapping)
+                (sounddevice-like). Internally, the engine may capture more channels so that
+                the requested device channels are available (up to max(mapping)).
+                Format: non-empty sequence, e.g. [1] or [2, 1].
             output_mapping: 1-based output channel mapping (OutputStream/Stream only). If provided,
-                the engine plays `channels` output channels, but the callback receives only
-                shape (frames, len(output_mapping)); those columns are routed into the selected
-                device output channels. Requires: channels >= max(output_mapping).
+                `channels` refers to the callback channel count and must equal len(output_mapping)
+                (sounddevice-like). Internally, the engine may open more output channels so that
+                routing into the selected device channels is possible (up to max(output_mapping)).
             device: Device selection for the stream. Same semantics as audiodevice `rec()`/`play()`:
                 `int` for a single device index, or `(in_idx, out_idx)` tuple. If not provided,
                 uses global defaults (`ad.default.device` / overrides).
@@ -3491,53 +3490,85 @@ class _StreamBase:
             hostapi_name, dev_in, dev_out = self._resolve_hostapi_and_devices_for_stream()
         backend_eff, engine_hostapi, _disp = _hostapi_display_to_engine(hostapi_name)
 
-        # Channels
+        # Channels (sounddevice-like mapping semantics).
+        # - `self.channels` is the callback channel count (in/out or duplex).
+        # - mapping/output_mapping select device channels; internally we may open more channels.
         in_ch_capture = 0
         in_ch_cb = 0
         out_ch = 0
         mode = "playrec"
         return_audio = True
+        map_in = self._mapping_cols
+        map_out = self._output_mapping_cols
+
+        def _infer_cb_ch(kind: str) -> int:
+            if kind == "input":
+                if self.channels is None:
+                    return int(len(map_in)) if map_in is not None else 1
+                return int(self.channels)
+            if kind == "output":
+                if self.channels is None:
+                    return int(len(map_out)) if map_out is not None else 1
+                return int(self.channels)
+            # duplex
+            if isinstance(self.channels, (list, tuple)) and len(self.channels) == 2:
+                return int(self.channels[0] or 1), int(self.channels[1] or 1)  # type: ignore[return-value]
+            if self.channels is None:
+                in0 = int(len(map_in)) if map_in is not None else 1
+                out0 = int(len(map_out)) if map_out is not None else 1
+                v0 = max(int(in0), int(out0))
+                return int(v0)
+            return int(self.channels)
+
         if self.kind == "input":
-            in_ch_capture = int(self.channels or (default.channels[0] or 1))
+            in_ch_cb = int(_infer_cb_ch("input"))
+            if map_in is not None and int(in_ch_cb) != int(len(map_in)):
+                raise ValueError(f"channels ({in_ch_cb}) must equal len(mapping) ({int(len(map_in))}) when mapping is used")
+            in_ch_capture = int(max(map_in) + 1) if map_in is not None else int(in_ch_cb)
             out_ch = 0
         elif self.kind == "output":
             # OutputStream does not need input; use "play" mode for stability.
             in_ch_capture = 0
-            out_ch = int(self.channels or (default.channels[1] or 1))
+            out_ch_cb = int(_infer_cb_ch("output"))
+            if map_out is not None and int(out_ch_cb) != int(len(map_out)):
+                raise ValueError(
+                    f"channels ({out_ch_cb}) must equal len(output_mapping) ({int(len(map_out))}) when output_mapping is used"
+                )
+            out_ch = int(max(map_out) + 1) if map_out is not None else int(out_ch_cb)
             mode = "play"
             return_audio = False
         else:
+            # duplex
             if isinstance(self.channels, (list, tuple)) and len(self.channels) == 2:
-                in_ch_capture = int(self.channels[0] or 1)
-                out_ch = int(self.channels[1] or 1)
+                in_ch_cb = int(self.channels[0] or 1)
+                out_ch_cb = int(self.channels[1] or 1)
             else:
-                v = int(self.channels or (default.channels[0] or 1))
-                in_ch_capture = v
-                out_ch = v
+                v = int(_infer_cb_ch("duplex"))
+                in_ch_cb = int(v)
+                out_ch_cb = int(v)
+
+            if map_in is not None and int(in_ch_cb) != int(len(map_in)):
+                raise ValueError(f"channels[0] ({in_ch_cb}) must equal len(mapping) ({int(len(map_in))}) when mapping is used")
+            if map_out is not None and int(out_ch_cb) != int(len(map_out)):
+                raise ValueError(
+                    f"channels[1] ({out_ch_cb}) must equal len(output_mapping) ({int(len(map_out))}) when output_mapping is used"
+                )
+            in_ch_capture = int(max(map_in) + 1) if map_in is not None else int(in_ch_cb)
+            out_ch = int(max(map_out) + 1) if map_out is not None else int(out_ch_cb)
 
         if int(in_ch_capture) < 0:
             in_ch_capture = 0
         if int(out_ch) < 0:
             out_ch = 0
 
-        mapping_cols = self._mapping_cols
-        if mapping_cols is not None and int(in_ch_capture) > 0:
-            need_ch = int(max(mapping_cols) + 1)
-            if int(in_ch_capture) < int(need_ch):
-                raise ValueError(f"channels ({in_ch_capture}) must be >= max(mapping) ({need_ch})")
-            in_ch_cb = int(len(mapping_cols))
-        else:
-            mapping_cols = None
+        mapping_cols = map_in if (map_in is not None and int(in_ch_capture) > 0) else None
+        if mapping_cols is None:
             in_ch_cb = int(in_ch_capture)
 
-        out_map_cols = self._output_mapping_cols
-        if out_map_cols is not None and int(out_ch) > 0:
-            need_ch = int(max(out_map_cols) + 1)
-            if int(out_ch) < int(need_ch):
-                raise ValueError(f"channels ({out_ch}) must be >= max(output_mapping) ({need_ch})")
+        out_map_cols = map_out if (map_out is not None and int(out_ch) > 0) else None
+        if out_map_cols is not None:
             out_ch_cb = int(len(out_map_cols))
         else:
-            out_map_cols = None
             out_ch_cb = int(out_ch)
 
         session_id = _next_session_id()
@@ -4103,7 +4134,7 @@ def rec_long(
             Format: float, e.g. 60.0, 300.0.
         samplerate: Sample rate in Hz. Uses default.samplerate if None.
             Format: int or None.
-        channels: Number of input channels. Uses default.channels[0] or 1 if None.
+        channels: Number of input channels. Inferred from mapping or 1 if None.
             Format: int or None.
         mapping: 1-based input channel mapping; when given, the engine records `channels` (or default)
             and each rotated WAV segment is post-processed to keep only the selected channels.
@@ -4118,8 +4149,15 @@ def rec_long(
     proc = _ensure_engine_running()
 
     fs = int(samplerate if samplerate is not None else (default.samplerate if default.samplerate is not None else _DEFAULT_SR_FALLBACK))
-    ch_def = default.channels[0] if getattr(default, "channels", None) is not None else None
-    ch = int(channels if channels is not None else (int(ch_def) if ch_def is not None else 1))
+    if channels is None:
+        # Infer minimal safe capture count from mapping (if provided), otherwise 1.
+        if mapping is not None:
+            m0 = list(mapping) if isinstance(mapping, (list, tuple)) else list(mapping)
+            ch = int(max(int(v) for v in m0))
+        else:
+            ch = 1
+    else:
+        ch = int(channels)
     mapping_cols: Optional[list[int]] = None
     if mapping is not None:
         m = list(mapping) if isinstance(mapping, (list, tuple)) else None

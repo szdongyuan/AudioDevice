@@ -11,15 +11,13 @@ else:
     ad.init(timeout=10)
 ad.print_default_devices()
 
-SAMPLERATE = 44100
+SAMPLERATE = 48000
 DURATION_S = 5.0
-DEVICE = (26, 27)  # (device_in, device_out)
-DEFAULT_CHANNELS_NUM = (1, 2)  # (in_ch, out_ch)
+DEVICE = (14, 18)  # (device_in, device_out)
 OUTPUT_MAPPING = [1,2]  # 1-based
 
 ad.default.samplerate = SAMPLERATE
 ad.default.device = DEVICE
-ad.default.channels = DEFAULT_CHANNELS_NUM
 
 def main() -> None:
     fs = int(SAMPLERATE)

@@ -276,7 +276,6 @@ def run() -> list[dict[str, Any]]:
         done_event = threading.Event()
 
         ad.default.device = job["device"]
-        ad.default.channels = job["channels_num"]
         ad.default.samplerate = sr
         ad.default.rb_seconds = RB_SECONDS
 
@@ -385,7 +384,6 @@ def run_sequential() -> list[dict[str, Any]]:
         ad.default.samplerate = play_sr
         ad.default.rb_seconds = RB_SECONDS
         ad.default.device = device
-        ad.default.channels = job["channels_num"]
         out_channels = len(mapping)
         audio = _load_and_resample(wav_path, play_sr, max_channels=out_channels)
         total_frames = audio.shape[0]
