@@ -24,6 +24,27 @@ ENGINE_EXE = "audiodevice.exe"
 ENGINE_DLL = "portaudio.dll"
 
 
+def _rmtree(path: Path) -> None:
+    if not path.exists():
+        return
+
+    def onerror(func, p, exc_info):  # noqa: ANN001
+        try:
+            Path(p).chmod(0o700)
+        except Exception:
+            pass
+        func(p)
+
+    shutil.rmtree(path, ignore_errors=False, onerror=onerror)
+
+
+def clean_build_artifacts() -> None:
+    for d in (PROJECT_ROOT / "build", PROJECT_ROOT / "audiodevice.egg-info"):
+        if d.exists():
+            print(f"Cleaning {d.name}/ ...")
+            _rmtree(d)
+
+
 def prepare_bin_artifacts() -> None:
     """Ensure audiodevice/bin/ has audiodevice.exe and portaudio.dll before building the wheel.
 
@@ -128,6 +149,7 @@ def main() -> int:
     version = current_version_string(include_time=True)
     print(f"Setting version to {version}")
     update_pyproject_version(version)
+    clean_build_artifacts()
     print("Preparing engine binaries for wheel (audiodevice/bin/)...")
     prepare_bin_artifacts()
     r = subprocess.run(
@@ -137,6 +159,7 @@ def main() -> int:
     )
     if r.returncode != 0:
         return r.returncode
+    clean_build_artifacts()
     print(f"Built wheel with version {version}")
     print("Install with: python -m pip install dist\\audiodevice-*.whl --force-reinstall")
     return 0
