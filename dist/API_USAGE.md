@@ -365,5 +365,8 @@ with ad.Stream(samplerate=48000, channels=(6, 2), blocksize=256, mapping=[3], ou
 - **callback 必须快**：避免做耗时 I/O（写盘/网络）、避免大对象频繁分配；建议把数据放进队列，后台线程处理。
 - **ASIO 兼容性**：某些 ASIO 驱动在 streaming / 全双工下更容易失败；优先尝试 `Windows WASAPI` 或 `MME`。
 - **blocksize**：越小延迟越低，但 CPU 压力越大；建议从 `256/512/1024` 试起。
-- **设备选择**：Streaming API 统一使用 `ad.default.device`（以及 `ad.default.device_in/device_out`）；不再支持 `Stream(..., device=...)` 这种“每个 stream 单独指定设备”的用法。
+- **同设备多线程**（重要）：不建议多个线程在**同一物理设备**上并发各自 `Stream/OutputStream/InputStream.start()`（每个线程都开一个 session），容易出现启动排队/延迟，甚至失败（duplex 更明显）。推荐做法是：同设备只开 **一个** stream/session，多线程只做“逻辑任务”，通过队列在单 stream 回调里做路由/混音/拆分。
+- **设备选择**：Streaming API 支持使用全局默认设备 `ad.default.device`（以及 `ad.default.device_in/device_out`），也支持在构造 stream 时传 `device=`；但同设备并发多 stream 仍不推荐（见上一条）。
+
+参考脚本（复现版 vs 单 session 共享流对照）：`audiodevice_py/examples/BUG20260320 there is a delay when a thread initializes a device #49.py`
 

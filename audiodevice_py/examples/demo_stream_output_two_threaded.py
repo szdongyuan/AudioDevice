@@ -19,10 +19,10 @@ import numpy as np
 import audiodevice as ad
 
 # ── 共享设备配置 ───────────────────────────────────────────────────────────
-DEVICE = (26, 27)                 # (device_in, device_out)
+DEVICE = (15, 16)                 # (device_in, device_out)
 DEFAULT_CHANNELS_NUM = (1, 2)
 SAMPLERATE = 44100
-BLOCKSIZE = 8192
+BLOCKSIZE = 1024
 RB_SECONDS = 20
 OUTPUT_CHANNELS_NUM = int(DEFAULT_CHANNELS_NUM[1])
 

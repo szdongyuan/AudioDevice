@@ -181,3 +181,27 @@ See:
 - `audiodevice_py/examples/demo_play.py`
 - `audiodevice_py/examples/demo_playrec.py`
 
+## Multithreading notes (same device)
+
+If you need multiple *logical* tasks concurrently on the **same physical device**:
+
+- **Avoid**: starting many `Stream`/`InputStream`/`OutputStream` concurrently on the same device (each thread opens its own session).
+  This can cause **startup queueing/delay** and sometimes failures (especially duplex / `playrec`).
+- **Prefer**: a **single** engine session / stream per device, and use queues to route/mix/split audio for multiple producers/consumers.
+
+Repro + solution comparison script:
+
+- `audiodevice_py/examples/BUG20260320 there is a delay when a thread initializes a device #49.py`
+
+Run (1 round / quick smoke):
+
+```powershell
+python "audiodevice_py/examples/BUG20260320 there is a delay when a thread initializes a device #49.py" compare_all 1
+```
+
+Run (10 rounds / full):
+
+```powershell
+python "audiodevice_py/examples/BUG20260320 there is a delay when a thread initializes a device #49.py" compare_all 10
+```
+
