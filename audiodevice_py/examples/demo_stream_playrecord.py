@@ -22,10 +22,10 @@ else:
     ad.init(timeout=10)
 ad.print_default_devices()
 
-SAMPLERATE = 48000
+SAMPLERATE = 44100
 BLOCKSIZE = 1024
 RB_SECONDS = 8
-DEVICE = (14, 18)  # (device_in, device_out)
+DEVICE = (15, 17)  # (device_in, device_out)
 
 # More stable defaults for stream demos
 ad.default.samplerate = SAMPLERATE
@@ -45,10 +45,10 @@ MODE = "alignment"
 
 DELAY_MS = 34
 ALIGNMENT_CH = 3  # 1-based, used when MODE="alignment"
-INPUT_MAPPING = [1,2,3]  # 1-based: keep these input channels in returned recording
+INPUT_MAPPING = [1]  # 1-based: keep these input channels in returned recording
 # 输出通道映射（1-based）：把 y 的每一列路由到指定的设备输出通道。
 # 例如 [2,1] 表示交换左右声道；[2] 表示把单通道送到右声道。
-OUTPUT_MAPPING = [1,2]
+OUTPUT_MAPPING = [1]
 OUT_CH = len(OUTPUT_MAPPING)
 
 

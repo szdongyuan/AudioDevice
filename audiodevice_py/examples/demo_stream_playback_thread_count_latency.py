@@ -51,7 +51,6 @@ SAMPLERATE = 48_000
 BLOCKSIZE = 1024
 RB_SECONDS = 20
 OUTPUT_MAPPING = [1, 2]  # 1-based: route callback columns to output channels
-DEVICE_OUT_CHANNELS = 2  # many devices/drivers reject mono (1ch) output configs
 DEVICE = (14, 18)  # (device_in, device_out)
 DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch) for engine default session
 # ---- end constants ----
@@ -177,7 +176,6 @@ def _run_tasks_raw_streams(
 
         mapping = list(task.mapping)
         dout = int(task.device_out)
-        out_channels = max(int(DEVICE_OUT_CHANNELS), max(int(x) for x in mapping))
         freq = float(task.freq_hz)
         phase = 0.0
 
@@ -221,7 +219,6 @@ def _run_tasks_raw_streams(
                 device=(din, dout),
                 samplerate=int(samplerate),
                 blocksize=int(blocksize),
-                channels=int(out_channels),
                 output_mapping=list(mapping),
                 callback=callback,
             )
@@ -312,7 +309,6 @@ def _run_grouped_by_device_streams(
                     seen.add(chi)
                     combined.append(chi)
         combined.sort()
-        out_channels = max(int(DEVICE_OUT_CHANNELS), max(combined) if combined else int(DEVICE_OUT_CHANNELS))
 
         # one producer queue per task (mono)
         q_list: list["queue.Queue[np.ndarray]"] = [queue.Queue(maxsize=64) for _ in dev_tasks]
@@ -396,7 +392,6 @@ def _run_grouped_by_device_streams(
                 device=(din, int(dout)),
                 samplerate=int(samplerate),
                 blocksize=int(blocksize),
-                channels=int(out_channels),
                 output_mapping=list(combined) if combined else None,  # type: ignore[arg-type]
                 callback=callback,
             )
@@ -454,7 +449,6 @@ def main() -> None:
     p.add_argument("--rb-seconds", type=float, default=float(RB_SECONDS))
     p.add_argument("--device-in", type=int, default=None)
     p.add_argument("--device-out", type=int, default=None)
-    p.add_argument("--out-channels", type=int, default=int(DEVICE_OUT_CHANNELS))
     p.add_argument("--out-mapping", type=str, default=",".join(str(x) for x in OUTPUT_MAPPING))
     p.add_argument(
         "--device-outs",
@@ -504,6 +498,7 @@ def main() -> None:
             "device_in": args.device_in,
             "device_out": args.device_out,
             "out_mapping_default": list(out_mapping),
+            "callback_out_ch_default": len(out_mapping),
             "device_outs": device_outs,
             "mappings": mappings,
             "amp": float(args.amp),

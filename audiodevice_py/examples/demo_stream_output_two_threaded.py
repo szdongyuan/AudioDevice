@@ -20,11 +20,9 @@ import audiodevice as ad
 
 # ── 共享设备配置 ───────────────────────────────────────────────────────────
 DEVICE = (15, 16)                 # (device_in, device_out)
-DEFAULT_CHANNELS_NUM = (1, 2)
 SAMPLERATE = 44100
 BLOCKSIZE = 1024
 RB_SECONDS = 20
-OUTPUT_CHANNELS_NUM = int(DEFAULT_CHANNELS_NUM[1])
 
 TASK_0_MAPPING = [1]              # WAV_PATH_0 → 左声道
 TASK_1_MAPPING = [2]              # WAV_PATH_1 → 右声道
@@ -122,7 +120,7 @@ def print_device_info(wav_path_0: str, wav_path_1: str) -> None:
             print(f"  │          hostapi={hostapi}  default_sr={dev_sr}  max_ch={max_ch}")
         except Exception as e:
             print(f"  │ {label}: [{idx}] 查询失败: {e}")
-    print(f"  │ channels_num={DEFAULT_CHANNELS_NUM}")
+    print("  │ OutputStream: callback 通道数由 output_mapping 自动推断")
     print(f"  │ blocksize={BLOCKSIZE}, rb_seconds={RB_SECONDS}")
     print(f"  │ task-0 → output_mapping={TASK_0_MAPPING} (左声道)")
     print(f"  │ task-1 → output_mapping={TASK_1_MAPPING} (右声道)")
@@ -224,13 +222,12 @@ def run_together() -> list[dict[str, Any]]:
 
     try:
         print(
-            f"  stream 参数: channels={OUTPUT_CHANNELS_NUM}, "
+            f"  stream 参数: callback_out_ch={len(combined_mapping)}, "
             f"output_mapping={combined_mapping}, "
             f"samplerate={play_sr}, blocksize={BLOCKSIZE}"
         )
         stream = ad.OutputStream(
             callback=callback,
-            channels=OUTPUT_CHANNELS_NUM,
             output_mapping=combined_mapping,
             samplerate=play_sr,
             blocksize=BLOCKSIZE,
@@ -343,12 +340,11 @@ def run_separate() -> list[dict[str, Any]]:
         try:
             cb = make_callback(audio, total_frames, pos, done_event, callback_ch)
             print(
-                f"  [{name}] stream: sr={play_sr}, channels={OUTPUT_CHANNELS_NUM}, "
+                f"  [{name}] stream: sr={play_sr}, callback_out_ch={len(mapping)}, "
                 f"mapping={mapping}, shape={audio.shape}"
             )
             stream = ad.OutputStream(
                 callback=cb,
-                channels=OUTPUT_CHANNELS_NUM,
                 output_mapping=mapping,
                 samplerate=play_sr,
                 blocksize=BLOCKSIZE,
@@ -416,7 +412,7 @@ def run() -> None:
     _, dout = ad.default.device
     print(f"  samplerate={ad.default.samplerate}, blocksize={BLOCKSIZE}")
     print(f"  device_const(in,out)={DEVICE}, device_used_out={dout}")
-    print(f"  output_channels_num={OUTPUT_CHANNELS_NUM}")
+    print("  OutputStream callback 通道数由 output_mapping 自动推断")
     print(f"  task-0 mapping={TASK_0_MAPPING}")
     print(f"  task-1 mapping={TASK_1_MAPPING}")
     print("  Use run_together() for concurrent playback (recommended).")

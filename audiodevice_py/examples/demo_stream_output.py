@@ -18,13 +18,11 @@ if _engine.is_file():
 else:
     ad.init(timeout=10)
 
-SAMPLERATE = 48000
+SAMPLERATE = 44100
 BLOCKSIZE = 1024
 RB_SECONDS = 20
-OUTPUT_MAPPING = [1, 2]  # 1-based: route callback columns to output channels
-DEVICE_OUT_CHANNELS = 2  # many devices/drivers reject mono (1ch) output configs
-CALLBACK_CHANNELS = len(OUTPUT_MAPPING)
-DEVICE = (14, 18)  # (device_in, device_out)
+OUTPUT_MAPPING = [2]  # [1]=left, [2]=right, [1, 2]=left+right
+DEVICE = (15, 17)  # (device_in, device_out)
 
 VOLUME = 0.5
 TOTAL_SECONDS = 4
@@ -107,9 +105,12 @@ def callback(indata, outdata, frames, time_info, status):
         sig *= env
 
     sig *= VOLUME
+    outdata.fill(0.0)
     if outdata.shape[1] >= 2:
-        outdata[:, 0] = sig
-        outdata[:, 1] = sig
+        if 1 in OUTPUT_MAPPING:
+            outdata[:, 0] = sig
+        if 2 in OUTPUT_MAPPING:
+            outdata[:, 1] = sig
     else:
         outdata[:, :] = sig[:, None]
 
@@ -124,10 +125,12 @@ def callback(indata, outdata, frames, time_info, status):
 
 # CHANNELS = 2
 
-print(f"播放正弦波 {TOTAL_SECONDS:.1f} 秒 (device_out_ch={DEVICE_OUT_CHANNELS}, callback_ch={CALLBACK_CHANNELS})...")
+print(
+    f"播放正弦波 {TOTAL_SECONDS:.1f} 秒 "
+    f"(callback_out_ch={len(OUTPUT_MAPPING)}, output_mapping={OUTPUT_MAPPING})..."
+)
 with ad.OutputStream(
     callback=callback,
-    channels=DEVICE_OUT_CHANNELS,
     output_mapping=OUTPUT_MAPPING,
     samplerate=SAMPLERATE,
     blocksize=BLOCKSIZE,

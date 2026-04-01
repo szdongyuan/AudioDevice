@@ -19,7 +19,7 @@ import audiodevice as ad
 
 SAMPLERATE = 48_000
 BLOCKSIZE = 1024
-CHANNELS = 2
+OUTPUT_MAPPING = [1]  # 回调列数由 output_mapping 推断；设备打开通道数由 OutputStream 内部自动兼容
 RB_SECONDS = 1  # 缓冲更小，更容易打满
 # 可选：如果你想强制指定输出设备，把它改成一个有效的“输出设备 index”（来自 ad.query_devices()）
 # 例如 DEVICE_OUT = 12
@@ -79,11 +79,14 @@ def main() -> None:
         if (time.perf_counter() - t0) > float(MAX_SECONDS):
             raise ad.CallbackStop()
 
-    print("Running output_overflow demo...")
+    print(
+        f"Running output_overflow demo... "
+        f"(callback_out_ch={len(OUTPUT_MAPPING)}, output_mapping={OUTPUT_MAPPING})"
+    )
     with ad.OutputStream(
         samplerate=SAMPLERATE,
         blocksize=BLOCKSIZE,
-        channels=CHANNELS,
+        output_mapping=OUTPUT_MAPPING,
         callback=cb,  # sounddevice-like: (outdata, frames, time, status)
         pacing=False,  # 关键：关闭节拍，快速写满输出缓冲
     ):

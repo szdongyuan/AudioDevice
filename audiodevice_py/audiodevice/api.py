@@ -3232,17 +3232,22 @@ class _StreamBase:
             blocksize: Frames per callback; 0 uses default (e.g. 1024).
                 Format: int.
             latency: Kept for compatibility; low-latency hint (best-effort).
-            channels: Channel count. For duplex: int or (in_ch, out_ch). For input/output: int.
-                Format: int or (int, int), e.g. 2 or (1, 2).
+            channels: Channel count. For duplex: int or (in_ch, out_ch). For input: int.
+                OutputStream ignores this argument and derives callback/output routing from
+                `output_mapping` (or uses mono when omitted). Format: int or (int, int),
+                e.g. 2 or (1, 2).
             mapping: 1-based input channel mapping (InputStream/Stream only). If provided,
                 `channels` refers to the callback channel count and must equal len(mapping)
                 (sounddevice-like). Internally, the engine may capture more channels so that
                 the requested device channels are available (up to max(mapping)).
                 Format: non-empty sequence, e.g. [1] or [2, 1].
-            output_mapping: 1-based output channel mapping (OutputStream/Stream only). If provided,
-                `channels` refers to the callback channel count and must equal len(output_mapping)
-                (sounddevice-like). Internally, the engine may open more output channels so that
-                routing into the selected device channels is possible (up to max(output_mapping)).
+            output_mapping: 1-based output channel mapping (OutputStream/Stream only). For
+                OutputStream, callback `outdata` shape is `(frames, len(output_mapping))`
+                and the engine output channel count is inferred automatically. For duplex
+                Stream, `channels` still refers to the callback channel count and must equal
+                len(output_mapping) (sounddevice-like). Internally, the engine may open more
+                output channels so that routing into the selected device channels is possible
+                (up to max(output_mapping)).
             device: Device selection for the stream. Same semantics as audiodevice `rec()`/`play()`:
                 `int` for a single device index, or `(in_idx, out_idx)` tuple. If not provided,
                 uses global defaults (`ad.default.device` / overrides).
@@ -3491,7 +3496,8 @@ class _StreamBase:
         backend_eff, engine_hostapi, _disp = _hostapi_display_to_engine(hostapi_name)
 
         # Channels (sounddevice-like mapping semantics).
-        # - `self.channels` is the callback channel count (in/out or duplex).
+        # - For InputStream/duplex Stream, `self.channels` is the callback channel count.
+        # - OutputStream derives callback channels from output_mapping (or mono by default).
         # - mapping/output_mapping select device channels; internally we may open more channels.
         in_ch_capture = 0
         in_ch_cb = 0
@@ -3529,11 +3535,7 @@ class _StreamBase:
         elif self.kind == "output":
             # OutputStream does not need input; use "play" mode for stability.
             in_ch_capture = 0
-            out_ch_cb = int(_infer_cb_ch("output"))
-            if map_out is not None and int(out_ch_cb) != int(len(map_out)):
-                raise ValueError(
-                    f"channels ({out_ch_cb}) must equal len(output_mapping) ({int(len(map_out))}) when output_mapping is used"
-                )
+            out_ch_cb = int(len(map_out)) if map_out is not None else 1
             out_ch = int(max(map_out) + 1) if map_out is not None else int(out_ch_cb)
             mode = "play"
             return_audio = False
@@ -3565,7 +3567,7 @@ class _StreamBase:
         if mapping_cols is None:
             in_ch_cb = int(in_ch_capture)
 
-        out_map_cols = map_out if (map_out is not None and int(out_ch) > 0) else None
+        out_map_cols = map_out if map_out is not None else None
         if out_map_cols is not None:
             out_ch_cb = int(len(out_map_cols))
         else:
@@ -3577,26 +3579,85 @@ class _StreamBase:
         # Ensure `finally` can always reference this, even if session_start fails early.
         stopped_gracefully = False
         try:
-            c.request(
-                {
-                    "cmd": "session_start",
-                    "session_id": session_id,
-                    "backend": backend_eff,
-                    "hostapi": engine_hostapi,
-                    "mode": mode,
-                    "sr": int(self.samplerate),
-                    "in_ch": int(in_ch_capture),
-                    "out_ch": int(out_ch),
-                    "device_in": dev_in,
-                    "device_out": dev_out,
-                    "duration_s": 0,
-                    "rotate_s": 0,
-                    "path": "",
-                    "play_path": "",
-                    "return_audio": return_audio,
-                    "rb_seconds": int(default.rb_seconds),
-                }
-            )
+            out_ch_candidates = [int(out_ch)]
+            if self.kind == "output" and out_map_cols is not None:
+                required_out_ch = int(max(out_map_cols) + 1)
+                out_idx0 = self._device_out_idx
+                if out_idx0 is None:
+                    try:
+                        out_idx0 = int(default.device[1])
+                    except Exception:
+                        out_idx0 = None
+
+                max_out0 = 0
+                if out_idx0 is not None and int(out_idx0) >= 0:
+                    try:
+                        max_out0 = int(query_devices(int(out_idx0)).get("max_output_channels", 0) or 0)
+                    except Exception:
+                        max_out0 = 0
+
+                cands: list[int] = [required_out_ch]
+                if required_out_ch == 1:
+                    cands.extend([2, 1])
+                if int(max_out0) > 0:
+                    cands.append(int(max_out0))
+                    for v in (2, 4, 6, 8, 12, 16):
+                        if int(v) <= int(max_out0):
+                            cands.append(int(v))
+                elif required_out_ch == 1:
+                    cands.append(2)
+
+                seen = set()
+                out_ch_candidates = []
+                for v in cands:
+                    vv = int(v)
+                    if vv < required_out_ch:
+                        continue
+                    if int(max_out0) > 0 and vv > int(max_out0):
+                        continue
+                    if vv not in seen:
+                        seen.add(vv)
+                        out_ch_candidates.append(vv)
+                if not out_ch_candidates:
+                    out_ch_candidates = [int(out_ch)]
+
+            last_start_err = None
+            started = False
+            for out_ch_try in out_ch_candidates:
+                try:
+                    c.request(
+                        {
+                            "cmd": "session_start",
+                            "session_id": session_id,
+                            "backend": backend_eff,
+                            "hostapi": engine_hostapi,
+                            "mode": mode,
+                            "sr": int(self.samplerate),
+                            "in_ch": int(in_ch_capture),
+                            "out_ch": int(out_ch_try),
+                            "device_in": dev_in,
+                            "device_out": dev_out,
+                            "duration_s": 0,
+                            "rotate_s": 0,
+                            "path": "",
+                            "play_path": "",
+                            "return_audio": return_audio,
+                            "rb_seconds": int(default.rb_seconds),
+                        }
+                    )
+                    out_ch = int(out_ch_try)
+                    started = True
+                    break
+                except RuntimeError as e:
+                    last_start_err = e
+                    msg = str(e).lower()
+                    retryable = ("no supported output config" in msg) or ("sr/ch" in msg)
+                    if not retryable:
+                        raise
+            if not started:
+                if last_start_err is not None:
+                    raise last_start_err
+                raise RuntimeError("failed to start stream session")
 
             frames = int(self.blocksize)
             block_dt = float(frames) / float(self.samplerate) if float(self.samplerate) > 0 else 0.0
@@ -3928,12 +3989,14 @@ class OutputStream(_StreamBase):
             samplerate: Sample rate in Hz. Uses default.samplerate if None.
             blocksize: Frames per callback; 0 uses default.
             latency: Compatibility arg.
-            channels: Output channel count played by the device.
+            channels: Accepted for compatibility but ignored. OutputStream callback channels are
+                derived from `output_mapping` (or mono when omitted), and device open-channel count
+                is inferred automatically.
             mapping: Alias for output_mapping (sounddevice-compatible name). 1-based output channel
-                mapping applied after callback. Requires channels >= max(mapping). Callback outdata
-                has shape (frames, len(mapping)).
-            output_mapping: 1-based output channel mapping applied after callback. Requires
-                channels >= max(output_mapping). Callback outdata has shape (frames, len(output_mapping)).
+                mapping applied after callback. Callback outdata has shape (frames, len(mapping)).
+            output_mapping: 1-based output channel mapping applied after callback. Callback outdata
+                has shape (frames, len(output_mapping)); device open-channel count is inferred
+                automatically and may be greater than len(output_mapping).
             device: Device selection for this stream. `int` or `(in_idx, out_idx)`; input part is ignored.
             callback: Callback signature like sounddevice:
                 callback(outdata, frames, time_info, status) -> None
@@ -3954,7 +4017,7 @@ class OutputStream(_StreamBase):
             samplerate=samplerate,
             blocksize=blocksize,
             latency=latency,
-            channels=channels,
+            channels=None,
             output_mapping=output_mapping,
             device=device,
             callback=callback,

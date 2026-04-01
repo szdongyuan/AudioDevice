@@ -27,9 +27,8 @@ ad.print_default_devices()
 
 SAMPLERATE = 48_000
 BLOCKSIZE = 1024
-DEVICE_OUT_CHANNELS = 2
-OUT_MAPPING = [1]  # 1-based: route callback channels into device output channels
-CALLBACK_CHANNELS = len(OUT_MAPPING)
+OUTPUT_MAPPING = [1]  # 1-based: route callback columns into device output channels
+CALLBACK_CHANNELS = len(OUTPUT_MAPPING)
 DURATION_S = 4.0
 F_START_HZ = 1000.0
 F_END_HZ = 3000.0
@@ -104,14 +103,16 @@ def main() -> None:
     t = threading.Thread(target=producer, daemon=True)
     t.start()
 
-    print(f"Starting stream. Log chirp {F_START_HZ:.0f}Hz -> {F_END_HZ:.0f}Hz ...")
+    print(
+        f"Starting stream. Log chirp {F_START_HZ:.0f}Hz -> {F_END_HZ:.0f}Hz "
+        f"(callback_out_ch={CALLBACK_CHANNELS}, output_mapping={OUTPUT_MAPPING}) ..."
+    )
     started = time.time()
     with ad.OutputStream(
         callback=callback,
-        channels=DEVICE_OUT_CHANNELS,
         samplerate=SAMPLERATE,
         blocksize=BLOCKSIZE,
-        mapping=OUT_MAPPING,
+        output_mapping=OUTPUT_MAPPING,
     ):
         # Keep the stream running; main thread could change params["volume"] if needed.
         last_print = 0.0
