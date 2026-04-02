@@ -35,13 +35,12 @@ BLOCKSIZE = 1024
 ROTATE_S = 10.0  # set to 0 to disable rotation
 INPUT_MAPPING = [1, 3, 5]  # 1-based: keep these input channels (and order) in WAV
 INPUT_CHANNELS = len(INPUT_MAPPING)  # sounddevice-like: callback channels == len(mapping)
-RB_SECONDS = 8
+RB_FRAMES = 4096
 DEVICE = (10, 12)  # (device_in, device_out)
 
 # More stable defaults for stream demos
 ad.default.samplerate = SAMPLERATE
 ad.default.device = DEVICE
-ad.default.rb_seconds = RB_SECONDS
 
 
 @dataclass
@@ -197,6 +196,7 @@ def main() -> None:
             samplerate=SAMPLERATE,
             blocksize=BLOCKSIZE,
             mapping=INPUT_MAPPING,
+            rb_frames=RB_FRAMES,
 
         ):
             while True:

@@ -38,18 +38,19 @@ def init_engine() -> None:
 DURATION_S = 10
 DELAY_MS = 34
 BLOCKSIZE = 1024
-RB_SECONDS = 8
 
 # 参考 demo_stream_input_diff_threaded / demo_rec_diff_threaded：按你的机器改
 DEVICE_0 = (15, 16)
 SAMPLERATE_0 = 44100
 CHANNELS_NUM_0 = (1, 2)  # (in_ch, out_ch)
 MAPPING_0 = [1]  # 1-based
+RB_FRAMES_0 = 4096
 
 DEVICE_1 = (14, 18)
 SAMPLERATE_1 = 48000
 CHANNELS_NUM_1 = (6, 2)
 MAPPING_1 = [3]  # 1-based
+RB_FRAMES_1 = 4096
 
 SAVE_DIR = os.path.join(os.path.dirname(__file__), "recordings", "test_multi_thread_multi_device")
 # ---- end constants ----
@@ -184,6 +185,7 @@ def _stream_worker(tag: str, device: tuple[int, int], sr: int, in_channels: int,
             channels=int(len(mapping)),
             mapping=mapping,
             blocksize=int(BLOCKSIZE),
+            rb_frames=RB_FRAMES_0 if int(sr) == int(SAMPLERATE_0) else RB_FRAMES_1,
             delay_time=int(DELAY_MS),
             callback=callback,
         )
@@ -226,7 +228,6 @@ def _stream_worker(tag: str, device: tuple[int, int], sr: int, in_channels: int,
 
 def run() -> None:
     init_engine()
-    ad.default.rb_seconds = int(RB_SECONDS)
 
     print("=== test: multi-thread multi-device ===")
     ad.print_default_devices()

@@ -32,12 +32,11 @@ CALLBACK_CHANNELS = len(OUTPUT_MAPPING)
 DURATION_S = 4.0
 F_START_HZ = 1000.0
 F_END_HZ = 3000.0
-RB_SECONDS = 8
+RB_FRAMES = 4096
 DEVICE = (10, 12) 
 
 # More stable defaults for stream demos
 ad.default.samplerate = SAMPLERATE
-ad.default.rb_seconds = RB_SECONDS
 ad.default.device = DEVICE
 
 
@@ -113,6 +112,7 @@ def main() -> None:
         samplerate=SAMPLERATE,
         blocksize=BLOCKSIZE,
         output_mapping=OUTPUT_MAPPING,
+        rb_frames=RB_FRAMES,
     ):
         # Keep the stream running; main thread could change params["volume"] if needed.
         last_print = 0.0

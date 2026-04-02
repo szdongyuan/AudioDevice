@@ -67,11 +67,15 @@ impl Session {
         if matches!(mode, SessionMode::RecordLong) && params.rotate_s <= 0.0 {
             params.rotate_s = 300.0;
         }
-        let rb_seconds = if params.rb_seconds == 0 { 2 } else { params.rb_seconds };
+        let rb_frames = if params.rb_frames == 0 {
+            (params.sr as usize).saturating_mul(2)
+        } else {
+            params.rb_frames
+        };
 
-        let bus_in = AudioRing::new(params.sr, params.in_ch, rb_seconds)?;
-        let bus_out = AudioRing::new(params.sr, params.out_ch, rb_seconds)?;
-        let capture = AudioRing::new(params.sr, params.in_ch, rb_seconds)?;
+        let bus_in = AudioRing::new(params.sr, params.in_ch, rb_frames)?;
+        let bus_out = AudioRing::new(params.sr, params.out_ch, rb_frames)?;
+        let capture = AudioRing::new(params.sr, params.in_ch, rb_frames)?;
 
         let stop_flag = Arc::new(AtomicBool::new(false));
         let play_finished = Arc::new(AtomicBool::new(false));

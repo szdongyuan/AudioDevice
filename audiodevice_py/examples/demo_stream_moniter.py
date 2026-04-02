@@ -19,10 +19,10 @@ else:
 ad.print_default_devices()
 
 SAMPLERATE = 48000
-BLOCKSIZE = 4096
+BLOCKSIZE = 1024
 IN_CH = 6
 OUT_CH = 2
-RB_SECONDS = 8
+RB_FRAMES = 4096
 DEVICE = (10, 12)   # (device_in, device_out)
 DURATION_MS = 10000
 TARGET_FRAMES = int(round(SAMPLERATE * (DURATION_MS / 1000.0)))
@@ -36,7 +36,6 @@ OUTPUT_MAPPING = [1]
 # More stable defaults for stream demos
 ad.default.samplerate = SAMPLERATE
 ad.default.device = DEVICE
-ad.default.rb_seconds = RB_SECONDS
 
 
 def save_wav(path: Path, data_f32: np.ndarray, samplerate: int, channels: int) -> None:
@@ -92,6 +91,7 @@ stream = ad.Stream(
     output_mapping=OUTPUT_MAPPING,
     samplerate=SAMPLERATE,
     blocksize=BLOCKSIZE,
+    rb_frames=RB_FRAMES,
 )
 stream.start()
 # 注意：回调的处理速度可能慢于实时（TCP 往返/调度等），所以不要用固定 sleep 来估算结束时刻。

@@ -20,7 +20,7 @@ ad.print_default_devices()
 
 SAMPLERATE = 48_000
 BLOCKSIZE = 1024
-RB_SECONDS = 8
+RB_FRAMES = 4096
 DEVICE = (14, 18)  # (device_in, device_out)
 DURATION_MS = 3000
 TARGET_FRAMES = int(round(SAMPLERATE * (DURATION_MS / 1000.0)))
@@ -32,7 +32,6 @@ SAVE_CHANNELS = len(INPUT_MAPPING)
 # More stable defaults for stream demos
 ad.default.samplerate = SAMPLERATE
 ad.default.device = DEVICE
-ad.default.rb_seconds = RB_SECONDS
 
 
 def save_wav(path: Path, data_f32: np.ndarray, samplerate: int, channels: int) -> None:
@@ -73,6 +72,7 @@ stream = ad.InputStream(
     channels=CHANNELS,
     samplerate=SAMPLERATE,
     blocksize=BLOCKSIZE,
+    rb_frames=RB_FRAMES,
     delay_time=int(DELAY_MS),
     mapping=INPUT_MAPPING
 )

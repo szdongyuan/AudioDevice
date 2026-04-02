@@ -52,7 +52,8 @@ class DefaultConfig:
     device_in: int = -1
     device_out: int = -1
 
-    rb_seconds: int = 2
+    rb_seconds: float = 2.0
+    rb_frames: Optional[int] = 4096
 
     auto_start: bool = False
     engine_exe: str = "audiodevice.exe"
@@ -430,6 +431,7 @@ class _DefaultHolder:
         self._cfg.device = (-1, -1)
         self._cfg.device_in = -1
         self._cfg.device_out = -1
+        self._cfg.rb_frames = 4096
 
     def __getattr__(self, name: str):
         """Forward attribute access to the underlying config dataclass."""

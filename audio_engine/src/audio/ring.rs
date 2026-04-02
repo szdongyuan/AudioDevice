@@ -13,8 +13,8 @@ pub struct AudioRing {
 }
 
 impl AudioRing {
-    pub fn new(sr: u32, ch: u16, rb_seconds: u32) -> Result<Self> {
-        let frames = (sr as usize) * (rb_seconds.max(1) as usize);
+    pub fn new(sr: u32, ch: u16, rb_frames: usize) -> Result<Self> {
+        let frames = rb_frames.max(1);
         let samples = frames * (ch.max(1) as usize);
         let (prod, cons) = RingBuffer::<f32>::new(samples);
         Ok(Self {

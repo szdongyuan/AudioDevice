@@ -36,11 +36,10 @@ OUT_CH = 2
 IN_CH = 1
 DELAY_MS = 500
 EVENT_MS = 1000
-RB_SECONDS = 8
+RB_FRAMES = 4096
 
 # More stable defaults for stream-ish demos
 ad.default.samplerate = SAMPLERATE
-ad.default.rb_seconds = RB_SECONDS
 
 
 def _peak_index(x: np.ndarray) -> int:
@@ -85,6 +84,7 @@ def main() -> None:
         blocking=True,
         samplerate=SAMPLERATE,
         channels=IN_CH,
+        rb_frames=RB_FRAMES,
         delay_time=0,
         save_wav=False,
     )
@@ -97,6 +97,7 @@ def main() -> None:
         blocking=True,
         samplerate=SAMPLERATE,
         channels=IN_CH,
+        rb_frames=RB_FRAMES,
         delay_time=DELAY_MS,
         save_wav=False,
     )

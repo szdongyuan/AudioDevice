@@ -31,8 +31,8 @@ PRINT_CALLBACK_INTERVALS = False
 # audiodevice 预热：先用一个很短的静音流启动一次 session/设备，把“首次启动成本”提前支付掉
 AUDIODEVICE_WARMUP = True
 AUDIODEVICE_WARMUP_SEC = 0.3
-# 引擎环形缓冲大小（秒）。值越大，某些后端/设备的“启动/预填充”成本可能越高。
-AUDIODEVICE_RB_SECONDS = 2
+# 引擎环形缓冲容量（帧）。值越大，某些后端/设备的“启动/预填充”成本可能越高。
+AUDIODEVICE_RB_FRAMES = 4096
 # 是否强制把 stream.start() 串行化（用于验证引擎内部是否存在全局排队/锁）
 SERIALIZE_STREAM_START = False
 # 单 stream 模式的每线程队列容量（block 数）
@@ -323,11 +323,12 @@ def _active_seconds(x: np.ndarray, samplerate: int) -> float:
     return round(float(idx[-1] - idx[0] + 1) / float(samplerate), 4)
 
 
-def _estimate_prefill_blocks(*, samplerate: int, blocksize: int, rb_seconds: float) -> int:
+def _estimate_prefill_blocks(*, samplerate: int, blocksize: int, rb_frames: int) -> int:
     block_dt = float(blocksize) / float(samplerate) if int(samplerate) > 0 else 0.0
     if block_dt <= 0.0:
         return 0
-    prefill_s = min(2.0, float(rb_seconds) * 0.2)
+    rb_s = float(rb_frames) / float(samplerate) if int(samplerate) > 0 else 0.0
+    prefill_s = min(2.0, float(rb_s) * 0.2)
     return max(4, int(prefill_s / block_dt))
 
 
@@ -367,15 +368,15 @@ def _warmup_audiodevice_stream(ad_module, *, in_channels: int = 0, out_channels:
         mode = "input"
 
     if mode == "output":
-    def _warm_cb(indata, outdata, frames, time_info, status) -> None:  # noqa: ARG001
-        outdata.fill(0.0)
+        def _warm_cb(indata, outdata, frames, time_info, status) -> None:  # noqa: ARG001
+            outdata.fill(0.0)
 
-    warm = ad_module.OutputStream(
-        samplerate=int(SAMPLERATE),
-        blocksize=int(BLOCKSIZE),
-        channels=int(out_channels),
-        callback=_warm_cb,
-    )
+        warm = ad_module.OutputStream(
+            samplerate=int(SAMPLERATE),
+            blocksize=int(BLOCKSIZE),
+            channels=int(out_channels),
+            callback=_warm_cb,
+        )
     elif mode == "input":
         def _warm_cb(indata, outdata, frames, time_info, status) -> None:  # noqa: ARG001
             _ = indata
@@ -546,23 +547,23 @@ def _thread_output_worker(
             result["t_prep_audio_sec"] = round(t_prep1 - t_prep0, 6)
 
         def _copy_to_out(outdata: np.ndarray, frames: int) -> None:
-                now = time.perf_counter()
-                if first_cb_ts[0] is None:
-                    first_cb_ts[0] = now
-                if PRINT_CALLBACK_INTERVALS:
-                    if last_cb_ts[0] is not None:
+            now = time.perf_counter()
+            if first_cb_ts[0] is None:
+                first_cb_ts[0] = now
+            if PRINT_CALLBACK_INTERVALS:
+                if last_cb_ts[0] is not None:
                     print(f"[{lib_name}][thread-{entry['thread']}] cb_dt={now - last_cb_ts[0]:.6f}s")
-                    last_cb_ts[0] = now
+                last_cb_ts[0] = now
 
-                remain = int(total_frames) - cursor[0]
+            remain = int(total_frames) - cursor[0]
             take = int(min(int(frames), max(remain, 0)))
-                    outdata.fill(0.0)
+            outdata.fill(0.0)
             if take > 0 and x is not None:
-                    blk = x[cursor[0] : cursor[0] + take]
-                    for src_col, dst_col in enumerate(mapping_cols):
+                blk = x[cursor[0] : cursor[0] + take]
+                for src_col, dst_col in enumerate(mapping_cols):
                     if 0 <= int(dst_col) < int(outdata.shape[1]) and src_col < int(blk.shape[1]):
                         outdata[:take, int(dst_col)] = blk[:, int(src_col)]
-                    cursor[0] += int(take)
+                cursor[0] += int(take)
 
         if audiodevice_style_callback:
             def callback(indata, outdata, frames, time_info, status) -> None:  # noqa: ARG001
@@ -643,20 +644,20 @@ def _thread_input_worker(
         result["t_prep_audio_sec"] = 0.0
 
         def callback(indata, outdata, frames, time_info, status) -> None:  # noqa: ARG001
-                now = time.perf_counter()
-                if first_cb_ts[0] is None:
-                    first_cb_ts[0] = now
-                if PRINT_CALLBACK_INTERVALS:
-                    if last_cb_ts[0] is not None:
+            now = time.perf_counter()
+            if first_cb_ts[0] is None:
+                first_cb_ts[0] = now
+            if PRINT_CALLBACK_INTERVALS:
+                if last_cb_ts[0] is not None:
                     print(f"[{lib_name}][thread-{entry['thread']}] cb_dt={now - last_cb_ts[0]:.6f}s")
-                    last_cb_ts[0] = now
+                last_cb_ts[0] = now
 
             remain = int(target_frames) - int(captured[0])
-                if remain <= 0:
+            if remain <= 0:
                 done_event.set()
                 raise ad_module.CallbackStop()
             take = int(min(int(frames), remain))
-                if take > 0:
+            if take > 0:
                 chunks.append(_slice_input(indata, mapping_cols, take))
                 captured[0] += int(take)
             if captured[0] >= target_frames:
@@ -798,7 +799,7 @@ def _thread_duplex_worker(
         t_start0 = time.perf_counter()
         if stream_start_lock is None:
             stream.start()
-            else:
+        else:
             with stream_start_lock:
                 stream.start()
         t_start1 = time.perf_counter()
@@ -970,7 +971,7 @@ def run_audiodevice_play_threads() -> list[dict[str, Any]]:
     _init_audiodevice_engine(ad)
     ad.default.device = tuple(DEVICE)
     ad.default.samplerate = int(SAMPLERATE)
-    ad.default.rb_seconds = int(AUDIODEVICE_RB_SECONDS)
+    ad.default.rb_frames = int(AUDIODEVICE_RB_FRAMES)
     max_out_ch = max(int(ch) for ch in THREAD_OUTPUT_CHANNELS)
     _warmup_audiodevice_stream(ad, out_channels=int(max_out_ch))
 
@@ -1024,7 +1025,7 @@ def run_audiodevice_record_threads() -> list[dict[str, Any]]:
     _init_audiodevice_engine(ad)
     ad.default.device = tuple(DEVICE)
     ad.default.samplerate = int(SAMPLERATE)
-    ad.default.rb_seconds = int(AUDIODEVICE_RB_SECONDS)
+    ad.default.rb_frames = int(AUDIODEVICE_RB_FRAMES)
     max_in_ch = max(int(ch) for ch in THREAD_INPUT_CHANNELS)
     _warmup_audiodevice_stream(ad, in_channels=int(max_in_ch))
 
@@ -1071,7 +1072,7 @@ def run_audiodevice_playrec_threads() -> list[dict[str, Any]]:
     _init_audiodevice_engine(ad)
     ad.default.device = tuple(DEVICE)
     ad.default.samplerate = int(SAMPLERATE)
-    ad.default.rb_seconds = int(AUDIODEVICE_RB_SECONDS)
+    ad.default.rb_frames = int(AUDIODEVICE_RB_FRAMES)
     max_in_ch = max(int(ch) for ch in THREAD_INPUT_CHANNELS)
     max_out_ch = max(int(ch) for ch in THREAD_OUTPUT_CHANNELS)
     _warmup_audiodevice_stream(ad, in_channels=int(max_in_ch), out_channels=int(max_out_ch))
@@ -1120,7 +1121,7 @@ def run_audiodevice_single_stream() -> list[dict[str, Any]]:
     _init_audiodevice_engine(ad)
     ad.default.device = tuple(DEVICE)
     ad.default.samplerate = int(SAMPLERATE)
-    ad.default.rb_seconds = int(AUDIODEVICE_RB_SECONDS)
+    ad.default.rb_frames = int(AUDIODEVICE_RB_FRAMES)
 
     max_out_ch_cfg = max(int(ch) for ch in THREAD_OUTPUT_CHANNELS)
     max_map_ch = max(int(max(item["output_mapping"])) for item in entries) if entries else 2
@@ -1129,7 +1130,7 @@ def run_audiodevice_single_stream() -> list[dict[str, Any]]:
     prefill_blocks = _estimate_prefill_blocks(
         samplerate=int(SAMPLERATE),
         blocksize=int(BLOCKSIZE),
-        rb_seconds=float(AUDIODEVICE_RB_SECONDS),
+        rb_frames=int(AUDIODEVICE_RB_FRAMES),
     )
 
     q_by_tid: dict[int, Queue[np.ndarray]] = {
@@ -1344,7 +1345,7 @@ def run_audiodevice_single_input_stream() -> list[dict[str, Any]]:
     _init_audiodevice_engine(ad)
     ad.default.device = tuple(DEVICE)
     ad.default.samplerate = int(SAMPLERATE)
-    ad.default.rb_seconds = int(AUDIODEVICE_RB_SECONDS)
+    ad.default.rb_frames = int(AUDIODEVICE_RB_FRAMES)
 
     combined_input_mapping = sorted({int(ch) for item in entries for ch in item["input_mapping"]})
     input_cols_by_tid = {
@@ -1519,7 +1520,7 @@ def run_audiodevice_single_duplex_stream() -> list[dict[str, Any]]:
     _init_audiodevice_engine(ad)
     ad.default.device = tuple(DEVICE)
     ad.default.samplerate = int(SAMPLERATE)
-    ad.default.rb_seconds = int(AUDIODEVICE_RB_SECONDS)
+    ad.default.rb_frames = int(AUDIODEVICE_RB_FRAMES)
 
     combined_input_mapping = sorted({int(ch) for item in entries for ch in item["input_mapping"]})
     combined_output_mapping = sorted({int(ch) for item in entries for ch in item["output_mapping"]})
@@ -1541,7 +1542,7 @@ def run_audiodevice_single_duplex_stream() -> list[dict[str, Any]]:
     prefill_blocks = _estimate_prefill_blocks(
         samplerate=int(SAMPLERATE),
         blocksize=int(BLOCKSIZE),
-        rb_seconds=float(AUDIODEVICE_RB_SECONDS),
+        rb_frames=int(AUDIODEVICE_RB_FRAMES),
     )
     target_frames = int(round(float(TONE_DURATION_SEC) * float(SAMPLERATE)))
 

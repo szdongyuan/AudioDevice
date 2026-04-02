@@ -36,6 +36,7 @@ DEVICE: tuple[int, int] = (14, 18)  # (input_device, output_device)
 # DEVICE: tuple[int, int] = (12, 11)
 
 SAMPLERATE = 48000
+RB_FRAMES = 4096
 TONE_DURATION_SEC = 4.0
 TONE_AMPLITUDE = 0.2
 # 在 TONE_DURATION_SEC 总时长内重复扫频的次数
@@ -419,7 +420,7 @@ def run_audiodevice_threads() -> list[dict[str, Any]]:
     ad.default.device = tuple(DEVICE)
     ad.default.samplerate = int(SAMPLERATE)
     max_out_ch = max(int(ch) for ch in THREAD_OUTPUT_CHANNELS)
-    ad.default.rb_seconds = 20
+    ad.default.rb_frames = RB_FRAMES
 
     results: list[dict[str, Any]] = []
     lock = threading.Lock()

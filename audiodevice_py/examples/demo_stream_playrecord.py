@@ -24,13 +24,12 @@ ad.print_default_devices()
 
 SAMPLERATE = 44100
 BLOCKSIZE = 1024
-RB_SECONDS = 8
+RB_FRAMES = 4096
 DEVICE = (15, 17)  # (device_in, device_out)
 
 # More stable defaults for stream demos
 ad.default.samplerate = SAMPLERATE
 ad.default.device = DEVICE
-ad.default.rb_seconds = RB_SECONDS
 
 DURATION_S = 3.0
 # Chirp 参数（线性扫频：f0 -> f1）
@@ -81,6 +80,7 @@ def main() -> None:
             y,
             samplerate=fs,
             blocksize=BLOCKSIZE,
+            rb_frames=RB_FRAMES,
             delay_time=float(DELAY_MS),
             alignment=False,
             input_mapping=INPUT_MAPPING,
@@ -98,6 +98,7 @@ def main() -> None:
             y,
             samplerate=fs,
             blocksize=BLOCKSIZE,
+            rb_frames=RB_FRAMES,
             delay_time=float(DELAY_MS),  # will be ignored in alignment mode
             alignment=True,
             alignment_channel=int(ALIGNMENT_CH),

@@ -25,7 +25,7 @@ struct EngineConfig {
     in_ch: u16,
     out_ch: u16,
     wav_path: String,
-    rb_seconds: u32,
+    rb_frames: usize,
     wav_queue_capacity: usize,
 }
 
@@ -37,7 +37,7 @@ impl Default for EngineConfig {
             in_ch: 2,
             out_ch: 2,
             wav_path: "record.wav".to_string(),
-            rb_seconds: 2,
+            rb_frames: 48_000usize * 2,
             wav_queue_capacity: 128,
         }
     }
@@ -98,7 +98,7 @@ struct Cmd {
     in_ch: Option<u16>,
     out_ch: Option<u16>,
     path: Option<String>,
-    rb_seconds: Option<u32>,
+    rb_frames: Option<usize>,
     wav_queue_capacity: Option<usize>,
     device_name_contains: Option<String>,
 }

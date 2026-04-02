@@ -24,6 +24,7 @@ TEST_CONFIG: dict[str, Any] = {
     "result_timeout": 20.0,
     "save_dir": "recordings/two_proc_same_device_stream",
 }
+RB_FRAMES = 4096
 
 
 def init_engine() -> None:
@@ -225,7 +226,7 @@ def run() -> None:
 
     ad.default.device = tuple(cfg["device"])
     ad.default.samplerate = samplerate
-    ad.default.rb_seconds = 8
+    ad.default.rb_frames = RB_FRAMES
 
     blocksize = int(cfg["blocksize"])
     target_frames = int(round(float(cfg["seconds"]) * samplerate))

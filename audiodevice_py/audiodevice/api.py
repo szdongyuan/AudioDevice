@@ -30,6 +30,53 @@ _ENGINE_PROC: Optional[subprocess.Popen] = None
 _ENGINE_JOB_HANDLE: Optional[int] = None
 
 
+def _resolve_rb_frames(
+    samplerate: Union[int, float],
+    *,
+    rb_seconds: Optional[float] = None,
+    rb_frames: Optional[int] = None,
+    min_seconds: float = 0.0,
+    min_frames: int = 1,
+    blocksize: Optional[int] = None,
+) -> int:
+    """Convert a ring-buffer duration to engine frames.
+
+    The engine protocol uses `rb_frames` so sub-second buffers remain precise.
+    When `blocksize` is provided, the result is rounded up to a whole number of
+    callback blocks to avoid partial-block capacity.
+    """
+    fs = float(samplerate)
+    if fs <= 0.0:
+        raise ValueError("samplerate must be > 0")
+
+    if rb_seconds is not None and rb_frames is not None:
+        raise ValueError("Provide only one of rb_seconds or rb_frames")
+
+    frames_from_default = getattr(default, "rb_frames", None)
+    if rb_frames is None and frames_from_default is not None:
+        try:
+            rb_frames = int(frames_from_default)
+        except Exception:
+            rb_frames = None
+
+    if rb_frames is not None:
+        frames = int(rb_frames)
+    else:
+        secs = rb_seconds if rb_seconds is not None else getattr(default, "rb_seconds", 2.0)
+        secs = max(float(secs), float(min_seconds), 0.0)
+        frames = int(np.ceil(secs * fs))
+
+    if rb_seconds is None:
+        frames = max(frames, int(np.ceil(float(min_seconds) * fs)))
+
+    if blocksize is not None and int(blocksize) > 0:
+        blk = int(blocksize)
+        frames = max(frames, blk)
+        frames = int(((frames + blk - 1) // blk) * blk)
+
+    return max(int(frames), int(min_frames))
+
+
 def _win32_job_add_process_kill_on_close(proc: subprocess.Popen) -> None:
     """Best-effort: ensure a spawned engine is killed when Python exits (Windows).
 
@@ -1199,7 +1246,8 @@ def rec_monitor(
     channels: Optional[int] = None,
     device_in: Optional[int] = None,
     device_out: Optional[int] = None,
-    rb_seconds: Optional[int] = None,
+    rb_seconds: Optional[float] = None,
+    rb_frames: Optional[int] = None,
 ) -> Union[np.ndarray, RecordingHandle]:
     """Record while monitoring (listen-through) for a fixed duration.
 
@@ -1227,6 +1275,8 @@ def rec_monitor(
         device_out: Output device index used for monitoring playback. None = use default.
             Only int is accepted.
         rb_seconds: Ring buffer size in seconds; larger reduces overrun risk.
+            Format: float|int or None.
+        rb_frames: Ring buffer size in frames; overrides `rb_seconds` when provided.
             Format: int or None.
 
     Returns:
@@ -1281,9 +1331,6 @@ def rec_monitor(
     if save_wav and not wav_path:
         raise ValueError("save_wav=True requires a non-empty wav_path")
     wav_path_abs = os.path.abspath(wav_path) if (save_wav and wav_path) else ""
-
-    rb_send = int(rb_seconds if rb_seconds is not None else default.rb_seconds)
-    rb_send = max(rb_send, int(np.ceil(dur)) + 1, 2)
 
     hostapi_eff, dev_in, dev_out = _resolve_hostapi_and_devices(
         hostapi=None,
@@ -1378,7 +1425,12 @@ def rec_monitor(
                         "path": wav_path_abs,
                         "play_path": "",
                         "return_audio": True,
-                        "rb_seconds": rb_send,
+                        "rb_frames": _resolve_rb_frames(
+                            fs_try,
+                            rb_seconds=rb_seconds,
+                            rb_frames=rb_frames,
+                            min_seconds=max(float(np.ceil(dur)) + 1.0, 2.0),
+                        ),
                     }
                     if monitor_in_idx is not None:
                         req["monitor_in_idx"] = int(monitor_in_idx)
@@ -1533,7 +1585,8 @@ def _rec_engine(
     channels: Optional[int] = None,
     hostapi: Optional[str] = None,
     device_in: Optional[int] = None,
-    rb_seconds: Optional[int] = None,
+    rb_seconds: Optional[float] = None,
+    rb_frames: Optional[int] = None,
 ) -> Union[np.ndarray, RecordingHandle]:
     """Start an engine recording session.
 
@@ -1546,7 +1599,8 @@ def _rec_engine(
         channels (Optional[int]): Number of input channels.
         hostapi (Optional[str]): Host API display name.
         device_in (Optional[int]): Input device index (global index from query_devices()). None = use default. Only int accepted.
-        rb_seconds (Optional[int]): Ringbuffer size in seconds.
+        rb_seconds (Optional[float]): Ringbuffer size in seconds.
+        rb_frames (Optional[int]): Ringbuffer size in frames.
 
     Returns:
         np.ndarray | RecordingHandle: Recorded audio (float32) if blocking; otherwise a handle.
@@ -1566,10 +1620,7 @@ def _rec_engine(
 
     wav_path_abs = os.path.abspath(wav_path) if (save_wav and wav_path) else ""
 
-    rb_send = int(rb_seconds if rb_seconds is not None else default.rb_seconds)
-    if blocking:
-        # Reduce risk of capture overruns for longer blocking recordings.
-        rb_send = max(rb_send, int(np.ceil(duration_s)) + 1, 2)
+    min_rb_seconds = max(float(np.ceil(duration_s)) + 1.0, 2.0) if blocking else 0.0
 
     hostapi_eff, dev_in, _dev_out = _resolve_hostapi_and_devices(
         hostapi=hostapi,
@@ -1596,7 +1647,12 @@ def _rec_engine(
             "rotate_s": 0,
             "path": wav_path_abs,
             "return_audio": True,
-            "rb_seconds": rb_send,
+            "rb_frames": _resolve_rb_frames(
+                fs,
+                rb_seconds=rb_seconds,
+                rb_frames=rb_frames,
+                min_seconds=min_rb_seconds,
+            ),
         }
     )
 
@@ -1635,7 +1691,8 @@ def _play_engine(
     samplerate: Optional[int] = None,
     hostapi: Optional[str] = None,
     device_out: Optional[int] = None,
-    rb_seconds: Optional[int] = None,
+    rb_seconds: Optional[float] = None,
+    rb_frames: Optional[int] = None,
     chunk_frames: int = 4096,
 ) -> None:
     """Play audio through the engine.
@@ -1646,7 +1703,8 @@ def _play_engine(
         samplerate (Optional[int]): Samplerate in Hz.
         hostapi (Optional[str]): Host API display name.
         device_out (Optional[int]): Output device index (global index from query_devices()). None = use default. Only int accepted.
-        rb_seconds (Optional[int]): Engine ringbuffer size in seconds.
+        rb_seconds (Optional[float]): Engine ringbuffer size in seconds.
+        rb_frames (Optional[int]): Engine ringbuffer size in frames.
         chunk_frames (int): Chunk size (frames) per network write.
 
     Raises:
@@ -1687,7 +1745,7 @@ def _play_engine(
             "path": "",
             "play_path": "",
             "return_audio": False,
-            "rb_seconds": int(rb_seconds if rb_seconds is not None else default.rb_seconds),
+            "rb_frames": _resolve_rb_frames(fs, rb_seconds=rb_seconds, rb_frames=rb_frames),
         }
     )
 
@@ -1728,7 +1786,8 @@ def _playrec_engine(
     hostapi: Optional[str] = None,
     device_in: Optional[int] = None,
     device_out: Optional[int] = None,
-    rb_seconds: Optional[int] = None,
+    rb_seconds: Optional[float] = None,
+    rb_frames: Optional[int] = None,
     chunk_frames: int = 4096,
     delay_time_ms=0,
     alignment: bool = False,
@@ -1747,7 +1806,8 @@ def _playrec_engine(
         hostapi (Optional[str]): Host API display name.
         device_in (Optional[int]): Input device index (global index from query_devices()). None = use default. Only int accepted.
         device_out (Optional[int]): Output device index. None = use default. Only int accepted.
-        rb_seconds (Optional[int]): Engine ringbuffer size in seconds.
+        rb_seconds (Optional[float]): Engine ringbuffer size in seconds.
+        rb_frames (Optional[int]): Engine ringbuffer size in frames.
         chunk_frames (int): Chunk size (frames) per network write.
 
     Returns:
@@ -1771,9 +1831,7 @@ def _playrec_engine(
         raise ValueError("save_wav=True requires a non-empty wav_path")
     wav_path_abs = os.path.abspath(wav_path) if (save_wav and wav_path) else ""
 
-    rb_send = int(rb_seconds if rb_seconds is not None else default.rb_seconds)
-    if blocking and rb_seconds is None:
-        rb_send = max(rb_send, 8)
+    min_rb_seconds = 8.0 if (blocking and rb_seconds is None) else 0.0
 
     hostapi_eff, dev_in, dev_out = _resolve_hostapi_and_devices(
         hostapi=hostapi,
@@ -1847,7 +1905,12 @@ def _playrec_engine(
                             "path": wav_path_abs,
                             "play_path": "",
                             "return_audio": True,
-                            "rb_seconds": rb_send,
+                            "rb_frames": _resolve_rb_frames(
+                                fs_try,
+                                rb_seconds=rb_seconds,
+                                rb_frames=rb_frames,
+                                min_seconds=min_rb_seconds,
+                            ),
                         }
                     )
                     fs = int(fs_try)
@@ -2239,7 +2302,8 @@ def play(
             - device (int|tuple[int,int]|None): Device index or (input_index, output_index).
             - channels (int|None): Force output channel count (e.g. 1 or 2). If the selected
               output device supports fewer channels, audio is automatically downmixed/truncated.
-            - rb_seconds (int|None): Engine ring buffer size in seconds.
+            - rb_seconds (float|None): Engine ring buffer size in seconds.
+            - rb_frames (int|None): Engine ring buffer size in frames.
             - chunk_frames (int): Frames per write; default 4096.
 
     Raises:
@@ -2264,6 +2328,7 @@ def play(
     device_kw = kwargs.pop("device", None) if "device" in kwargs else None
     channels_kw = kwargs.pop("channels", None) if "channels" in kwargs else None
     rb_seconds = kwargs.pop("rb_seconds", None)
+    rb_frames = kwargs.pop("rb_frames", None)
     chunk_frames = int(kwargs.pop("chunk_frames", 4096))
 
     fs = float(samplerate) if samplerate is not None else (default.samplerate if default.samplerate is not None else _DEFAULT_SR_FALLBACK)
@@ -2378,6 +2443,7 @@ def play(
                         hostapi=hostapi_name,
                         device_out=out_idx,
                         rb_seconds=rb_seconds,
+                        rb_frames=rb_frames,
                         chunk_frames=chunk_frames,
                     )
                     return
@@ -2432,6 +2498,7 @@ def play(
                     hostapi=hostapi_name,
                     device_out=out_idx,
                     rb_seconds=rb_seconds,
+                    rb_frames=rb_frames,
                     chunk_frames=chunk_frames,
                 )
             except BaseException as e:
@@ -2457,6 +2524,7 @@ def play(
         hostapi=hostapi_name,
         device_out=out_idx,
         rb_seconds=rb_seconds,
+        rb_frames=rb_frames,
         chunk_frames=chunk_frames,
     )
 
@@ -2493,7 +2561,8 @@ def rec(
             - device (int|tuple[int,int]|None): Device index or (in_idx, out_idx).
             - wav_path (str): WAV file path when save_wav=True (required then).
             - save_wav (bool): Whether to also write a WAV file.
-            - rb_seconds (int|None): Engine ring buffer size in seconds.
+            - rb_seconds (float|None): Engine ring buffer size in seconds.
+            - rb_frames (int|None): Engine ring buffer size in frames.
 
     Returns:
         np.ndarray: Recorded audio (same object as out when out is provided).
@@ -2531,6 +2600,7 @@ def rec(
     wav_path = str(kwargs.pop("wav_path", "") or "")
     save_wav = bool(kwargs.pop("save_wav", False))
     rb_seconds = kwargs.pop("rb_seconds", None)
+    rb_frames = kwargs.pop("rb_frames", None)
 
     if save_wav and not wav_path:
         raise ValueError("save_wav=True requires wav_path")
@@ -2597,6 +2667,7 @@ def rec(
             hostapi=None,
             device_in=in_idx,
             rb_seconds=rb_seconds,
+            rb_frames=rb_frames,
         )
         assert isinstance(y, np.ndarray)
         return y
@@ -2682,7 +2753,8 @@ def playrec(
             - device (int|tuple[int,int]|None): Device index or (in_idx, out_idx).
             - wav_path (str): WAV path for recorded audio when save_wav=True (required then).
             - save_wav (bool): Whether to save recorded audio to WAV.
-            - rb_seconds (int|None): Engine ring buffer size in seconds.
+            - rb_seconds (float|None): Engine ring buffer size in seconds.
+            - rb_frames (int|None): Engine ring buffer size in frames.
             - chunk_frames (int): Frames per write.
 
     Returns:
@@ -2736,6 +2808,7 @@ def playrec(
     wav_path = str(kwargs.pop("wav_path", "") or "")
     save_wav = bool(kwargs.pop("save_wav", False))
     rb_seconds = kwargs.pop("rb_seconds", None)
+    rb_frames = kwargs.pop("rb_frames", None)
     chunk_frames = int(kwargs.pop("chunk_frames", 4096))
 
     if save_wav and not wav_path:
@@ -2819,6 +2892,7 @@ def playrec(
             device_in=in_idx if (in_idx is not None and int(in_idx) >= 0) else None,
             device_out=out_idx if (out_idx is not None and int(out_idx) >= 0) else None,
             rb_seconds=rb_seconds,
+            rb_frames=rb_frames,
             chunk_frames=chunk_frames,
             delay_time_ms=delay_time,
             alignment=bool(alignment),
@@ -3221,6 +3295,7 @@ class _StreamBase:
         callback=None,
         delay_time=0,
         pacing: bool = True,
+        rb_frames: Optional[int] = None,
     ) -> None:
         """Create a stream object (not started yet).
 
@@ -3259,6 +3334,8 @@ class _StreamBase:
                 This is mainly useful for capture-only streams (InputStream). Format: float/int (ms).
             pacing: Whether to pace the callback loop roughly in real-time (best-effort).
                 Set False for stress-testing (may overfill engine buffers).
+            rb_frames: Engine ring buffer size in frames. When omitted, uses
+                `default.rb_frames` if set, otherwise derives from `default.rb_seconds`.
         """
         self.kind = str(kind)
         self.samplerate = float(samplerate) if samplerate is not None else (
@@ -3279,6 +3356,7 @@ class _StreamBase:
         self._cb_style: Optional[str] = None
         self.delay_time = 0.0 if delay_time is None else float(delay_time)
         self.pacing = bool(pacing)
+        self.rb_frames = None if rb_frames is None else int(rb_frames)
 
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
@@ -3642,7 +3720,13 @@ class _StreamBase:
                             "path": "",
                             "play_path": "",
                             "return_audio": return_audio,
-                            "rb_seconds": int(default.rb_seconds),
+                            "rb_frames": _resolve_rb_frames(
+                                self.samplerate,
+                                rb_frames=self.rb_frames,
+                                rb_seconds=None,
+                                blocksize=int(self.blocksize),
+                                min_frames=int(self.blocksize),
+                            ),
                         }
                     )
                     out_ch = int(out_ch_try)
@@ -3939,6 +4023,7 @@ class InputStream(_StreamBase):
         callback=None,
         delay_time=0,
         pacing: bool = True,
+        rb_frames: Optional[int] = None,
     ) -> None:
         """Create an input stream.
 
@@ -3965,6 +4050,7 @@ class InputStream(_StreamBase):
             callback=callback,
             delay_time=delay_time,
             pacing=pacing,
+            rb_frames=rb_frames,
         )
 
 
@@ -3982,6 +4068,7 @@ class OutputStream(_StreamBase):
         device=None,
         callback=None,
         pacing: bool = True,
+        rb_frames: Optional[int] = None,
     ) -> None:
         """Create an output stream.
 
@@ -4022,6 +4109,7 @@ class OutputStream(_StreamBase):
             device=device,
             callback=callback,
             pacing=pacing,
+            rb_frames=rb_frames,
         )
 
 
@@ -4187,7 +4275,8 @@ def rec_long(
     samplerate: Optional[int] = None,
     channels: Optional[int] = None,
     device_in: Optional[int] = None,
-    rb_seconds: Optional[int] = None,
+    rb_seconds: Optional[float] = None,
+    rb_frames: Optional[int] = None,
     mapping: Optional[list[int]] = None,
 ) -> LongRecordingHandle:
     """Record continuously to disk and rotate files periodically.
@@ -4206,6 +4295,8 @@ def rec_long(
             Format: non-empty list of 1-based channel indices, e.g. [1] or [1, 3, 2].
         device_in: Input device index (global index from query_devices()). None = use default. Only int accepted.
         rb_seconds: Engine ring buffer size in seconds.
+            Format: float|int or None.
+        rb_frames: Engine ring buffer size in frames.
             Format: int or None.
 
     Returns:
@@ -4267,7 +4358,7 @@ def rec_long(
             "path": path_abs,
             "play_path": "",
             "return_audio": False,
-            "rb_seconds": int(rb_seconds if rb_seconds is not None else default.rb_seconds),
+            "rb_frames": _resolve_rb_frames(fs, rb_seconds=rb_seconds, rb_frames=rb_frames),
         }
     )
 

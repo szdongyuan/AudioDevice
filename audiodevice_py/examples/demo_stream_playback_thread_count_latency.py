@@ -49,7 +49,7 @@ import audiodevice as ad
 # ---- constants (similar to demo_stream_output.py) ----
 SAMPLERATE = 48_000
 BLOCKSIZE = 1024
-RB_SECONDS = 20
+RB_FRAMES = 4096
 OUTPUT_MAPPING = [1, 2]  # 1-based: route callback columns to output channels
 DEVICE = (14, 18)  # (device_in, device_out)
 DEFAULT_CHANNELS_NUM = (6, 2)  # (in_ch, out_ch) for engine default session
@@ -119,8 +119,9 @@ class TaskSpec:
     freq_hz: float
 
 
-def _estimate_prefill_blocks(*, samplerate: int, blocksize: int, rb_seconds: float) -> int:
+def _estimate_prefill_blocks(*, samplerate: int, blocksize: int, rb_frames: int) -> int:
     block_dt = float(blocksize) / float(samplerate) if samplerate > 0 else 0.0
+    rb_seconds = float(rb_frames) / float(samplerate) if samplerate > 0 else 0.0
     prefill_s = min(2.0, float(rb_seconds) * 0.2) if block_dt > 0 else 0.0
     return max(4, int(prefill_s / block_dt)) if block_dt > 0 else 0
 
@@ -148,7 +149,7 @@ def _run_tasks_raw_streams(
     seconds: float,
     samplerate: int,
     blocksize: int,
-    rb_seconds: float,
+    rb_frames: int,
     device_in: int | None,
     amp: float,
     callback_work_ms: float,
@@ -156,7 +157,7 @@ def _run_tasks_raw_streams(
     if not tasks:
         return []
 
-    prefill_blocks = _estimate_prefill_blocks(samplerate=samplerate, blocksize=blocksize, rb_seconds=rb_seconds)
+    prefill_blocks = _estimate_prefill_blocks(samplerate=samplerate, blocksize=blocksize, rb_frames=rb_frames)
 
     start_ev = threading.Event()
     results: list[MultiStreamThreadResult] = []
@@ -219,6 +220,7 @@ def _run_tasks_raw_streams(
                 device=(din, dout),
                 samplerate=int(samplerate),
                 blocksize=int(blocksize),
+                rb_frames=int(rb_frames),
                 output_mapping=list(mapping),
                 callback=callback,
             )
@@ -279,7 +281,7 @@ def _run_grouped_by_device_streams(
     seconds: float,
     samplerate: int,
     blocksize: int,
-    rb_seconds: float,
+    rb_frames: int,
     device_in: int | None,
     amp: float,
     callback_work_ms: float,
@@ -287,7 +289,7 @@ def _run_grouped_by_device_streams(
     if not tasks:
         return []
 
-    prefill_blocks = _estimate_prefill_blocks(samplerate=samplerate, blocksize=blocksize, rb_seconds=rb_seconds)
+    prefill_blocks = _estimate_prefill_blocks(samplerate=samplerate, blocksize=blocksize, rb_frames=rb_frames)
 
     din = int(device_in) if device_in is not None else int(DEVICE[0])
 
@@ -392,6 +394,7 @@ def _run_grouped_by_device_streams(
                 device=(din, int(dout)),
                 samplerate=int(samplerate),
                 blocksize=int(blocksize),
+                rb_frames=int(rb_frames),
                 output_mapping=list(combined) if combined else None,  # type: ignore[arg-type]
                 callback=callback,
             )
@@ -446,7 +449,7 @@ def main() -> None:
     p.add_argument("--seconds", type=float, default=8.0)
     p.add_argument("--samplerate", type=int, default=int(SAMPLERATE))
     p.add_argument("--blocksize", type=int, default=int(BLOCKSIZE))
-    p.add_argument("--rb-seconds", type=float, default=float(RB_SECONDS))
+    p.add_argument("--rb-frames", type=int, default=int(RB_FRAMES))
     p.add_argument("--device-in", type=int, default=None)
     p.add_argument("--device-out", type=int, default=None)
     p.add_argument("--out-mapping", type=str, default=",".join(str(x) for x in OUTPUT_MAPPING))
@@ -480,7 +483,7 @@ def main() -> None:
     init_engine()
     ad.default.device = tuple(DEVICE)
     ad.default.samplerate = int(SAMPLERATE)
-    ad.default.rb_seconds = float(RB_SECONDS)
+    ad.default.rb_frames = int(args.rb_frames)
 
     print("=== defaults ===")
     ad.print_default_devices()
@@ -494,7 +497,7 @@ def main() -> None:
             "seconds": float(args.seconds),
             "samplerate": int(args.samplerate),
             "blocksize": int(args.blocksize),
-            "rb_seconds": float(args.rb_seconds),
+            "rb_frames": int(args.rb_frames),
             "device_in": args.device_in,
             "device_out": args.device_out,
             "out_mapping_default": list(out_mapping),
@@ -525,7 +528,7 @@ def main() -> None:
             seconds=float(args.seconds),
             samplerate=int(args.samplerate),
             blocksize=int(args.blocksize),
-            rb_seconds=float(args.rb_seconds),
+            rb_frames=int(args.rb_frames),
             device_in=args.device_in,
             amp=float(args.amp),
             callback_work_ms=float(args.callback_work_ms),
@@ -560,7 +563,7 @@ def main() -> None:
                 seconds=float(args.seconds),
                 samplerate=int(args.samplerate),
                 blocksize=int(args.blocksize),
-                rb_seconds=float(args.rb_seconds),
+                rb_frames=int(args.rb_frames),
                 device_in=args.device_in,
                 amp=float(args.amp),
                 callback_work_ms=float(args.callback_work_ms),
@@ -610,7 +613,7 @@ def main() -> None:
             seconds=float(args.seconds),
             samplerate=int(args.samplerate),
             blocksize=int(args.blocksize),
-            rb_seconds=float(args.rb_seconds),
+            rb_frames=int(args.rb_frames),
             device_in=args.device_in,
             amp=float(args.amp),
             callback_work_ms=float(args.callback_work_ms),
@@ -636,7 +639,7 @@ def main() -> None:
             seconds=float(args.seconds),
             samplerate=int(args.samplerate),
             blocksize=int(args.blocksize),
-            rb_seconds=float(args.rb_seconds),
+            rb_frames=int(args.rb_frames),
             device_in=args.device_in,
             amp=float(args.amp),
             callback_work_ms=float(args.callback_work_ms),

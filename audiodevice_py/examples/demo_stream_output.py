@@ -20,7 +20,7 @@ else:
 
 SAMPLERATE = 44100
 BLOCKSIZE = 1024
-RB_SECONDS = 20
+RB_FRAMES = 4096
 OUTPUT_MAPPING = [1]  # [1]=left, [2]=right, [1, 2]=left+right
 DEVICE = (15, 17)  # (device_in, device_out)
 
@@ -40,13 +40,13 @@ cb_status_q: "queue.Queue[tuple[int, str]]" = queue.Queue(maxsize=10000)  # (n, 
 # 注意：OutputStream 内部会先“预填充”一段输出环形缓冲，期间回调可能被紧密连续调用，dt 会远小于期望值。
 # 估算预填充回调次数（与 audiodevice.api._StreamBase._run 的逻辑保持一致），用于观测稳定段是否仍抖动。
 _block_dt = float(BLOCKSIZE) / float(SAMPLERATE) if float(SAMPLERATE) > 0 else 0.0
-_prefill_s = min(2.0, float(RB_SECONDS) * 0.2) if _block_dt > 0 else 0.0
+_rb_s = float(RB_FRAMES) / float(SAMPLERATE) if float(SAMPLERATE) > 0 else 0.0
+_prefill_s = min(2.0, float(_rb_s) * 0.2) if _block_dt > 0 else 0.0
 PREFILL_BLOCKS = max(4, int(_prefill_s / _block_dt)) if _block_dt > 0 else 0
 
 # More stable defaults for stream demos
 ad.default.samplerate = SAMPLERATE
 ad.default.device = DEVICE
-ad.default.rb_seconds = RB_SECONDS
 ad.print_default_devices()
 print(tuple(ad.default.device))
 
@@ -134,6 +134,7 @@ with ad.OutputStream(
     output_mapping=OUTPUT_MAPPING,
     samplerate=SAMPLERATE,
     blocksize=BLOCKSIZE,
+    rb_frames=RB_FRAMES,
 ):
     # OutputStream 在后台线程里做 session_start；某些设备/后端启动会有明显延迟。
     # 为了让“听到的时长”更接近 TOTAL_SECONDS，先等到 session 真正启动后再开始计时。

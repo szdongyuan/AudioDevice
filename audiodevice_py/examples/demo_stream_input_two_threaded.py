@@ -36,7 +36,7 @@ SAMPLERATE = 48000
 DURATION_S = 10
 DELAY_MS = 34
 BLOCKSIZE = 1024
-RB_SECONDS = 8
+RB_FRAMES = 4096
 DEVICE = (24, 30)
 THREAD_1_MAPPING = [1]
 THREAD_2_MAPPING = [3]
@@ -51,7 +51,6 @@ SAVE_DIR = os.path.join(
 
 def apply_defaults() -> tuple[int | None, int | None]:
     ad.default.samplerate = int(SAMPLERATE)
-    ad.default.rb_seconds = RB_SECONDS
 
     try:
         ad.default.device = DEVICE
@@ -177,6 +176,7 @@ def run_together() -> list[dict[str, Any]]:
             channels=int(len(combined_mapping)),
             samplerate=SAMPLERATE,
             blocksize=BLOCKSIZE,
+            rb_frames=RB_FRAMES,
             delay_time=int(DELAY_MS),
             mapping=combined_mapping,
         )
@@ -301,6 +301,7 @@ def run_separate() -> list[dict[str, Any]]:
                 channels=int(len(mapping)),
                 samplerate=SAMPLERATE,
                 blocksize=BLOCKSIZE,
+                rb_frames=RB_FRAMES,
                 delay_time=int(DELAY_MS),
                 mapping=mapping,
             )

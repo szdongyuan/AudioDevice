@@ -20,7 +20,8 @@ import audiodevice as ad
 SAMPLERATE = 48_000
 BLOCKSIZE = 1024
 OUTPUT_MAPPING = [1]  # 回调列数由 output_mapping 推断；设备打开通道数由 OutputStream 内部自动兼容
-RB_SECONDS = 1  # 缓冲更小，更容易打满
+# 故意小于默认 4096，便于更容易打满环形缓冲
+RB_FRAMES = 1024
 # 可选：如果你想强制指定输出设备，把它改成一个有效的“输出设备 index”（来自 ad.query_devices()）
 # 例如 DEVICE_OUT = 12
 # 注意：这里不要用 default.device=(in,out) 的方式，因为它会校验输入端是否是有效输入设备。
@@ -38,7 +39,6 @@ def init_engine() -> None:
 
     ad.print_default_devices()
     ad.default.samplerate = SAMPLERATE
-    ad.default.rb_seconds = int(RB_SECONDS)
     if DEVICE_OUT is not None:
         ad.default.device_out = int(DEVICE_OUT)
 
@@ -87,6 +87,7 @@ def main() -> None:
         samplerate=SAMPLERATE,
         blocksize=BLOCKSIZE,
         output_mapping=OUTPUT_MAPPING,
+        rb_frames=RB_FRAMES,
         callback=cb,  # sounddevice-like: (outdata, frames, time, status)
         pacing=False,  # 关键：关闭节拍，快速写满输出缓冲
     ):

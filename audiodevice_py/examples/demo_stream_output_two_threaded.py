@@ -19,10 +19,11 @@ import numpy as np
 import audiodevice as ad
 
 # ── 共享设备配置 ───────────────────────────────────────────────────────────
-DEVICE = (15, 16)                 # (device_in, device_out)
+DEVICE = (15, 17)                 # (device_in, device_out)
 SAMPLERATE = 44100
 BLOCKSIZE = 1024
-RB_SECONDS = 20
+# 引擎输出环形缓冲容量（帧）；越大越稳、延迟与启动/收尾成本通常越高。
+RB_FRAMES = 4096
 
 TASK_0_MAPPING = [1]              # WAV_PATH_0 → 左声道
 TASK_1_MAPPING = [2]              # WAV_PATH_1 → 右声道
@@ -121,7 +122,7 @@ def print_device_info(wav_path_0: str, wav_path_1: str) -> None:
         except Exception as e:
             print(f"  │ {label}: [{idx}] 查询失败: {e}")
     print("  │ OutputStream: callback 通道数由 output_mapping 自动推断")
-    print(f"  │ blocksize={BLOCKSIZE}, rb_seconds={RB_SECONDS}")
+    print(f"  │ blocksize={BLOCKSIZE}, rb_frames={RB_FRAMES}")
     print(f"  │ task-0 → output_mapping={TASK_0_MAPPING} (左声道)")
     print(f"  │ task-1 → output_mapping={TASK_1_MAPPING} (右声道)")
     for i, wp in enumerate([wav_path_0, wav_path_1]):
@@ -169,7 +170,6 @@ def run_together() -> list[dict[str, Any]]:
     init_engine()
     ad.default.samplerate = SAMPLERATE
     ad.default.device = DEVICE
-    ad.default.rb_seconds = RB_SECONDS
 
     all_mappings = [TASK_0_MAPPING, TASK_1_MAPPING]
     all_names = ["task-0", "task-1"]
@@ -231,6 +231,7 @@ def run_together() -> list[dict[str, Any]]:
             output_mapping=combined_mapping,
             samplerate=play_sr,
             blocksize=BLOCKSIZE,
+            rb_frames=RB_FRAMES,
         )
         stream.start()
 
@@ -307,7 +308,6 @@ def run_separate() -> list[dict[str, Any]]:
         init_engine()
         ad.default.samplerate = SAMPLERATE
         ad.default.device = DEVICE
-        ad.default.rb_seconds = RB_SECONDS
 
         play_sr = SAMPLERATE
         audio = _load_and_resample(wav_path, play_sr)
@@ -348,6 +348,7 @@ def run_separate() -> list[dict[str, Any]]:
                 output_mapping=mapping,
                 samplerate=play_sr,
                 blocksize=BLOCKSIZE,
+                rb_frames=RB_FRAMES,
             )
             stream.start()
 

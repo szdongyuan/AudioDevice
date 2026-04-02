@@ -38,8 +38,7 @@ def init_engine() -> None:
 
 
 # ---- constants ----
-BLOCKSIZE = 8192
-RB_SECONDS = 20
+BLOCKSIZE = 1024
 
 # 设备 0：设备索引 + 采样率 + (in_ch, out_ch) + 1-based output mapping
 DEVICE_0 = (26, 27)
@@ -48,6 +47,7 @@ DEFAULT_CHANNELS_NUM_0 = (1, 2)
 OUTPUT_CHANNELS_NUM_0 = int(DEFAULT_CHANNELS_NUM_0[1])
 OUTPUT_MAPPING_0 = [1, 2]
 WAV_PATH_0 = str(r"E:\2026\3\audiodevice_py\examples\车载试音\张三的歌（明亮度）.wav")
+RB_FRAMES_0 = 4096
 
 # 设备 1
 DEVICE_1 = (24, 30)
@@ -56,6 +56,7 @@ DEFAULT_CHANNELS_NUM_1 = (6, 2)
 OUTPUT_CHANNELS_NUM_1 = int(DEFAULT_CHANNELS_NUM_1[1])
 OUTPUT_MAPPING_1 = [1, 2]
 WAV_PATH_1 = str(r"E:\2026\3\audiodevice_py\examples\车载试音\晚秋&送别（丰满度）.wav")
+RB_FRAMES_1 = 4096
 
 # ---- end constants ----
 
@@ -69,6 +70,7 @@ DEVICE_JOBS: list[dict[str, Any]] = [
         "output_channels": OUTPUT_CHANNELS_NUM_0,
         "output_mapping": OUTPUT_MAPPING_0,
         "wav_path": WAV_PATH_0,
+        "rb_frames": RB_FRAMES_0,
     },
     {
         "name": "dev1",
@@ -78,6 +80,7 @@ DEVICE_JOBS: list[dict[str, Any]] = [
         "output_channels": OUTPUT_CHANNELS_NUM_1,
         "output_mapping": OUTPUT_MAPPING_1,
         "wav_path": WAV_PATH_1,
+        "rb_frames": RB_FRAMES_1,
     },
 ]
 
@@ -165,7 +168,7 @@ def print_device_info() -> None:
         except Exception as e:
             print(f"  │   wav={wp}  (读取失败: {e})")
         print(f"  │")
-    print(f"  │ blocksize={BLOCKSIZE}, rb_seconds={RB_SECONDS}")
+    print(f"  │ blocksize={BLOCKSIZE}, rb_frames per-device=({RB_FRAMES_0}, {RB_FRAMES_1})")
     print(f"  └────────────────────────────────────────────")
 
 
@@ -277,7 +280,6 @@ def run() -> list[dict[str, Any]]:
 
         ad.default.device = job["device"]
         ad.default.samplerate = sr
-        ad.default.rb_seconds = RB_SECONDS
 
         cb = _make_output_callback(audio, total_frames, position, done_event, out_channels)
         print(
@@ -290,6 +292,7 @@ def run() -> list[dict[str, Any]]:
             channels=job["channels_num"],
             samplerate=sr,
             blocksize=BLOCKSIZE,
+            rb_frames=int(job["rb_frames"]),
             output_mapping=job["output_mapping"],
         )
         stream.start()
@@ -382,7 +385,6 @@ def run_sequential() -> list[dict[str, Any]]:
         init_engine()
         play_sr = int(job["samplerate"])
         ad.default.samplerate = play_sr
-        ad.default.rb_seconds = RB_SECONDS
         ad.default.device = device
         out_channels = len(mapping)
         audio = _load_and_resample(wav_path, play_sr, max_channels=out_channels)
@@ -410,6 +412,7 @@ def run_sequential() -> list[dict[str, Any]]:
                 output_mapping=mapping,
                 samplerate=play_sr,
                 blocksize=BLOCKSIZE,
+                rb_frames=int(job["rb_frames"]),
             )
             stream.start()
 

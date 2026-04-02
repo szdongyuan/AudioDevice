@@ -106,7 +106,7 @@ pub struct SessionParams {
     pub return_audio: bool,
 
     #[serde(default)]
-    pub rb_seconds: u32,
+    pub rb_frames: usize,
 }
 
 #[derive(Debug, Serialize)]

@@ -40,7 +40,6 @@ def init_engine() -> None:
 DURATION_S = 10
 DELAY_MS = 34
 BLOCKSIZE = 1024
-RB_SECONDS = 8
 
 # 设备 0：设备索引 + 采样率 + (in_ch, out_ch) + 1-based mapping
 DEVICE_0 = (26, 27)
@@ -48,6 +47,7 @@ SAMPLERATE_0 = 44100
 DEFAULT_CHANNELS_NUM_0 = (1, 2)
 MAPPING_0 = [1]
 INPUT_CHANNELS_NUM_0 = len(MAPPING_0)  # sounddevice-like: callback channels == len(mapping)
+RB_FRAMES_0 = 4096
 
 # 设备 1
 DEVICE_1 = (24, 30)
@@ -55,6 +55,7 @@ SAMPLERATE_1 = 48000
 DEFAULT_CHANNELS_NUM_1 = (6, 2)
 MAPPING_1 = [3]
 INPUT_CHANNELS_NUM_1 = len(MAPPING_1)  # sounddevice-like: callback channels == len(mapping)
+RB_FRAMES_1 = 4096
 
 SAVE_DIR = os.path.join(
     os.path.dirname(__file__),
@@ -72,6 +73,7 @@ DEVICE_JOBS: list[dict[str, Any]] = [
         "channels_num": DEFAULT_CHANNELS_NUM_0,
         "input_channels": INPUT_CHANNELS_NUM_0,
         "mapping": MAPPING_0,
+        "rb_frames": RB_FRAMES_0,
     },
     {
         "name": "dev1",
@@ -80,6 +82,7 @@ DEVICE_JOBS: list[dict[str, Any]] = [
         "channels_num": DEFAULT_CHANNELS_NUM_1,
         "input_channels": INPUT_CHANNELS_NUM_1,
         "mapping": MAPPING_1,
+        "rb_frames": RB_FRAMES_1,
     },
 ]
 
@@ -164,7 +167,6 @@ def run() -> list[dict[str, Any]]:
     t0_total = time.perf_counter()
 
     init_engine()
-    ad.default.rb_seconds = RB_SECONDS
 
     print(f"duration_s={DURATION_S}, delay_ms={DELAY_MS}, blocksize={BLOCKSIZE}")
     for job in DEVICE_JOBS:
@@ -195,6 +197,7 @@ def run() -> list[dict[str, Any]]:
             channels=job["input_channels"],
             samplerate=sr,
             blocksize=BLOCKSIZE,
+            rb_frames=int(job["rb_frames"]),
             delay_time=int(DELAY_MS),
             mapping=job["mapping"],
         )
@@ -302,7 +305,6 @@ def run_sequential() -> list[dict[str, Any]]:
 
         init_engine()
         ad.default.samplerate = sr
-        ad.default.rb_seconds = RB_SECONDS
         ad.default.device = device
 
         target_frames = int(round(float(sr) * float(DURATION_S)))
@@ -329,6 +331,7 @@ def run_sequential() -> list[dict[str, Any]]:
                 channels=job["input_channels"],
                 samplerate=sr,
                 blocksize=BLOCKSIZE,
+                rb_frames=int(job["rb_frames"]),
                 delay_time=int(DELAY_MS),
                 mapping=mapping,
             )

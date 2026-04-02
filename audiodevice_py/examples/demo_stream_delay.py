@@ -34,11 +34,10 @@ BLOCKSIZE = 1024
 DURATION_MS = 1500
 DELAY_MS = 500
 REPEATS = 5
-RB_SECONDS = 8
+RB_FRAMES = 4096
 
 # More stable defaults for stream demos
 ad.default.samplerate = SAMPLERATE
-ad.default.rb_seconds = RB_SECONDS
 
 
 def run_once(*, delay_ms: int, samplerate: int, channels: int, blocksize: int, duration_ms: int):
@@ -73,6 +72,7 @@ def run_once(*, delay_ms: int, samplerate: int, channels: int, blocksize: int, d
         channels=int(channels),
         samplerate=int(samplerate),
         blocksize=int(blocksize),
+        rb_frames=RB_FRAMES,
         delay_time=int(delay_ms),
     )
     stream.start()
