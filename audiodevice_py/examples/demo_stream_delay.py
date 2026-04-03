@@ -29,7 +29,8 @@ else:
 ad.print_default_devices()
 
 SAMPLERATE = 48_000
-CHANNELS = 1
+INPUT_MAPPING = [1]  # 1-based: callback keeps only this input channel
+CHANNELS = len(INPUT_MAPPING)
 BLOCKSIZE = 1024
 DURATION_MS = 1500
 DELAY_MS = 500
@@ -74,6 +75,7 @@ def run_once(*, delay_ms: int, samplerate: int, channels: int, blocksize: int, d
         blocksize=int(blocksize),
         rb_frames=RB_FRAMES,
         delay_time=int(delay_ms),
+        mapping=INPUT_MAPPING,
     )
     stream.start()
 

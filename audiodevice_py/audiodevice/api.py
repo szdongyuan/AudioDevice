@@ -3657,8 +3657,53 @@ class _StreamBase:
         # Ensure `finally` can always reference this, even if session_start fails early.
         stopped_gracefully = False
         try:
+            in_ch_candidates = [int(in_ch_capture)]
+            if self.kind in ("input", "duplex") and int(in_ch_capture) > 0:
+                required_in_ch = int(max(map_in) + 1) if map_in is not None else int(in_ch_capture)
+                in_idx0 = self._device_in_idx
+                if in_idx0 is None:
+                    try:
+                        in_idx0 = int(default.device[0])
+                    except Exception:
+                        in_idx0 = None
+
+                max_in0 = 0
+                if in_idx0 is not None and int(in_idx0) >= 0:
+                    try:
+                        max_in0 = int(query_devices(int(in_idx0)).get("max_input_channels", 0) or 0)
+                    except Exception:
+                        max_in0 = 0
+
+                cands: list[int] = [required_in_ch]
+                if map_in is not None and required_in_ch == 1:
+                    # Many stereo devices reject 1ch opens even when the callback only
+                    # needs a single mapped column. Prefer a stereo device-open and slice
+                    # back to the requested mapping before invoking the callback.
+                    cands.extend([2, 1])
+                if int(max_in0) > 0:
+                    cands.append(int(max_in0))
+                    for v in (2, 4, 6, 8, 12, 16):
+                        if int(v) <= int(max_in0):
+                            cands.append(int(v))
+                elif map_in is not None and required_in_ch == 1:
+                    cands.append(2)
+
+                seen = set()
+                in_ch_candidates = []
+                for v in cands:
+                    vv = int(v)
+                    if vv < required_in_ch:
+                        continue
+                    if int(max_in0) > 0 and vv > int(max_in0):
+                        continue
+                    if vv not in seen:
+                        seen.add(vv)
+                        in_ch_candidates.append(vv)
+                if not in_ch_candidates:
+                    in_ch_candidates = [int(in_ch_capture)]
+
             out_ch_candidates = [int(out_ch)]
-            if self.kind == "output" and out_map_cols is not None:
+            if self.kind in ("output", "duplex") and out_map_cols is not None:
                 required_out_ch = int(max(out_map_cols) + 1)
                 out_idx0 = self._device_out_idx
                 if out_idx0 is None:
@@ -3676,6 +3721,9 @@ class _StreamBase:
 
                 cands: list[int] = [required_out_ch]
                 if required_out_ch == 1:
+                    # Many stereo devices reject 1ch opens even when the callback only
+                    # provides a single mapped output column. Prefer opening the device as
+                    # stereo and route callback columns into the requested device channels.
                     cands.extend([2, 1])
                 if int(max_out0) > 0:
                     cands.append(int(max_out0))
@@ -3701,43 +3749,51 @@ class _StreamBase:
 
             last_start_err = None
             started = False
-            for out_ch_try in out_ch_candidates:
-                try:
-                    c.request(
-                        {
-                            "cmd": "session_start",
-                            "session_id": session_id,
-                            "backend": backend_eff,
-                            "hostapi": engine_hostapi,
-                            "mode": mode,
-                            "sr": int(self.samplerate),
-                            "in_ch": int(in_ch_capture),
-                            "out_ch": int(out_ch_try),
-                            "device_in": dev_in,
-                            "device_out": dev_out,
-                            "duration_s": 0,
-                            "rotate_s": 0,
-                            "path": "",
-                            "play_path": "",
-                            "return_audio": return_audio,
-                            "rb_frames": _resolve_rb_frames(
-                                self.samplerate,
-                                rb_frames=self.rb_frames,
-                                rb_seconds=None,
-                                blocksize=int(self.blocksize),
-                                min_frames=int(self.blocksize),
-                            ),
-                        }
-                    )
-                    out_ch = int(out_ch_try)
-                    started = True
+            for in_ch_try in in_ch_candidates:
+                for out_ch_try in out_ch_candidates:
+                    try:
+                        c.request(
+                            {
+                                "cmd": "session_start",
+                                "session_id": session_id,
+                                "backend": backend_eff,
+                                "hostapi": engine_hostapi,
+                                "mode": mode,
+                                "sr": int(self.samplerate),
+                                "in_ch": int(in_ch_try),
+                                "out_ch": int(out_ch_try),
+                                "device_in": dev_in,
+                                "device_out": dev_out,
+                                "duration_s": 0,
+                                "rotate_s": 0,
+                                "path": "",
+                                "play_path": "",
+                                "return_audio": return_audio,
+                                "rb_frames": _resolve_rb_frames(
+                                    self.samplerate,
+                                    rb_frames=self.rb_frames,
+                                    rb_seconds=None,
+                                    blocksize=int(self.blocksize),
+                                    min_frames=int(self.blocksize),
+                                ),
+                            }
+                        )
+                        in_ch_capture = int(in_ch_try)
+                        out_ch = int(out_ch_try)
+                        started = True
+                        break
+                    except RuntimeError as e:
+                        last_start_err = e
+                        msg = str(e).lower()
+                        retryable = (
+                            ("no supported input config" in msg)
+                            or ("no supported output config" in msg)
+                            or ("sr/ch" in msg)
+                        )
+                        if not retryable:
+                            raise
+                if started:
                     break
-                except RuntimeError as e:
-                    last_start_err = e
-                    msg = str(e).lower()
-                    retryable = ("no supported output config" in msg) or ("sr/ch" in msg)
-                    if not retryable:
-                        raise
             if not started:
                 if last_start_err is not None:
                     raise last_start_err
@@ -4032,7 +4088,9 @@ class InputStream(_StreamBase):
             blocksize: Frames per callback; 0 uses default.
             latency: Compatibility arg.
             channels: Input channel count captured from the device.
-            mapping: 1-based input channel mapping applied before callback. Requires channels >= max(mapping).
+            mapping: 1-based input channel mapping applied before callback. The callback still sees
+                exactly len(mapping) columns; the device-open channel count may be expanded internally
+                (for example 1 mapped channel may open a stereo device as 2ch for compatibility).
             device: Device selection for this stream. `int` or `(in_idx, out_idx)`; output part is ignored.
             callback: Callback signature like sounddevice:
                 callback(indata, frames, time_info, status) -> None

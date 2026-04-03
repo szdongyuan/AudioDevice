@@ -18,15 +18,15 @@ else:
     ad.init(timeout=10)
 ad.print_default_devices()
 
-SAMPLERATE = 48_000
+SAMPLERATE = 44100
 BLOCKSIZE = 1024
 RB_FRAMES = 4096
-DEVICE = (14, 18)  # (device_in, device_out)
+DEVICE = (10, 12)  # (device_in, device_out)
 DURATION_MS = 3000
 TARGET_FRAMES = int(round(SAMPLERATE * (DURATION_MS / 1000.0)))
 DELAY_MS = 0
-INPUT_MAPPING = [1, 3, 5]  # 1-based: pick these input channels
-CHANNELS = len(INPUT_MAPPING)  # sounddevice-like: callback channels == len(mapping)
+INPUT_MAPPING = [1]  # 1-based: pick these input channels for the callback/output WAV
+CHANNELS = len(INPUT_MAPPING)  # Callback channels must still match len(mapping)
 SAVE_CHANNELS = len(INPUT_MAPPING)
 
 # More stable defaults for stream demos
@@ -74,7 +74,7 @@ stream = ad.InputStream(
     blocksize=BLOCKSIZE,
     rb_frames=RB_FRAMES,
     delay_time=int(DELAY_MS),
-    mapping=INPUT_MAPPING
+    mapping=INPUT_MAPPING,
 )
 stream.start()
 # 注意：sleep 只是“等待”，实际精确停止由 callback 中的 TARGET_FRAMES 控制
