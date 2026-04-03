@@ -21,7 +21,7 @@ else:
 SAMPLERATE = 44100
 BLOCKSIZE = 1024
 RB_FRAMES = 4096
-OUTPUT_MAPPING = [1]  # [1]=left, [2]=right, [1, 2]=left+right
+OUTPUT_MAPPING = [1,2]  # [1]=left, [2]=right, [1, 2]=left+right
 DEVICE = (15, 17)  # (device_in, device_out)
 
 VOLUME = 0.5

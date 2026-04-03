@@ -21,7 +21,7 @@ import audiodevice as ad
 # ── 共享设备配置 ───────────────────────────────────────────────────────────
 DEVICE = (15, 17)                 # (device_in, device_out)
 SAMPLERATE = 44100
-BLOCKSIZE = 1024
+BLOCKSIZE = 10240
 # 引擎输出环形缓冲容量（帧）；越大越稳、延迟与启动/收尾成本通常越高。
 RB_FRAMES = 4096
 
